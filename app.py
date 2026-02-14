@@ -57,9 +57,9 @@ if df.empty:
 st.subheader("Select Questions")
 
 # Filter for 'Ready' status
-# Adjust column names if your sheet is different!
-# Assuming columns: 'School', 'Word', 'Type', 'Content', 'Status'
+# We look for columns: 'School', 'Word', 'Type', 'Content', 'Status'
 try:
+    # Filter rows where Status is 'Ready' or 'Waiting'
     ready_df = df[df['Status'].isin(['Ready', 'Waiting'])]
 except KeyError:
     st.error("Column 'Status' not found. Please check your Google Sheet headers.")
@@ -84,11 +84,11 @@ edited_df = st.data_editor(
 def create_docx(school_name, questions):
     doc = Document()
     
-    # Font Setup
+    # Font Setup (Times New Roman + TW-Kai for Chinese)
     style = doc.styles['Normal']
     font = style.font
     font.name = 'Times New Roman'
-    font.element.rPr.rFonts.set(qn('w:eastAsia'), 'TW-Kai') # Try to set Chinese font
+    font.element.rPr.rFonts.set(qn('w:eastAsia'), 'TW-Kai') 
     
     # Title
     p = doc.add_paragraph()
@@ -103,6 +103,7 @@ def create_docx(school_name, questions):
     # Questions
     for i, row in enumerate(questions):
         p = doc.add_paragraph()
+        # Combine Number + Question Content
         run = p.add_run(f"{i+1}. {row['Content']}")
         run.font.size = Pt(14)
         
