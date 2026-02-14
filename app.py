@@ -31,15 +31,15 @@ try:
     CHINESE_FONT = None
     for path in font_paths:
         if os.path.exists(path):
-    if not CHINESE_FONT:
-        st.warning("⚠️ Chinese font not found. Chinese characters may appear as boxes in the PDF. Please upload a .ttf font file to your repository.")
-
             try:
                 pdfmetrics.registerFont(TTFont('ChineseFont', path))
                 CHINESE_FONT = 'ChineseFont'
                 break
             except:
                 continue
+    
+    if not CHINESE_FONT:
+        st.warning("⚠️ Chinese font not found. Chinese characters may appear as boxes in the PDF. Please upload a .ttf font file to your repository.")
 except ImportError:
     st.error("❌ reportlab not found. Please add 'reportlab' to your requirements.txt")
     st.stop()
