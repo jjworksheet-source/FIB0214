@@ -144,7 +144,6 @@ def create_pdf(school_name, questions):
         alignment=TA_CENTER,
         spaceAfter=12
     )
-    
     # Hanging indent style: leftIndent moves the whole block, firstLineIndent moves it back
     normal_style = ParagraphStyle(
         'CustomNormal',
@@ -170,7 +169,9 @@ def create_pdf(school_name, questions):
     for i, row in enumerate(questions):
         content = row['Content']
         # Convert 【】text【】 to <u>text</u> for underline (專名號)
+        # This regex handles both 【】text【】 and 【text】 formats
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
+        content = re.sub(r'【(.+?)】', r'<u>\1</u>', content)
         question_text = f"{i+1}. {content}"
         p = Paragraph(question_text, normal_style)
         story.append(p)
