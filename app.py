@@ -144,12 +144,16 @@ def create_pdf(school_name, questions):
         alignment=TA_CENTER,
         spaceAfter=12
     )
+    
+    # Hanging indent style: leftIndent moves the whole block, firstLineIndent moves it back
     normal_style = ParagraphStyle(
         'CustomNormal',
         parent=styles['Normal'],
         fontName=font_name,
         fontSize=14,
-        leading=20
+        leading=20,
+        leftIndent=25,
+        firstLineIndent=-25
     )
     
     # Title
