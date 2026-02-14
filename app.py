@@ -2,10 +2,13 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
-from docx import Document
-from docx.shared import Pt
-from docx.oxml.ns import qn
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.enums import TA_CENTER
 import datetime
 import io
 
@@ -80,40 +83,48 @@ edited_df = st.data_editor(
     hide_index=True
 )
 
-# --- 4. GENERATE WORD DOC ---
-def create_docx(school_name, questions):
-    doc = Document()
+# --- 4. GENERATE PDF ---
+def create_pdf(school_name, questions):
+    bio = io.BytesIO()
+    doc = SimpleDocTemplate(bio, pagesize=letter)
+    story = []
     
-    # Font Setup (Times New Roman + TW-Kai for Chinese)
-    style = doc.styles['Normal']
-    font = style.font
-    font.name = 'Times New Roman'
-    font.element.rPr.rFonts.set(qn('w:eastAsia'), 'TW-Kai') 
+    # Styles
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=20,
+        alignment=TA_CENTER,
+        spaceAfter=12
+    )
+    normal_style = styles['Normal']
+    normal_style.fontSize = 14
+    normal_style.leading = 20
     
     # Title
-    p = doc.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run(f"{school_name} - Weekly Review")
-    run.font.size = Pt(20)
-    run.bold = True
+    title = Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style)
+    story.append(title)
+    story.append(Spacer(1, 0.2*inch))
     
-    doc.add_paragraph(f"Date: {datetime.date.today()}")
-    doc.add_paragraph("-" * 30)
+    # Date
+    date_text = Paragraph(f"Date: {datetime.date.today()}", normal_style)
+    story.append(date_text)
+    story.append(Spacer(1, 0.3*inch))
     
     # Questions
     for i, row in enumerate(questions):
-        p = doc.add_paragraph()
-        # Combine Number + Question Content
-        run = p.add_run(f"{i+1}. {row['Content']}")
-        run.font.size = Pt(14)
-        
-    # Save to memory
-    bio = io.BytesIO()
-    doc.save(bio)
+        question_text = f"{i+1}. {row['Content']}"
+        p = Paragraph(question_text, normal_style)
+        story.append(p)
+        story.append(Spacer(1, 0.15*inch))
+    
+    # Build PDF
+    doc.build(story)
     bio.seek(0)
     return bio
 
-if st.button("🚀 Generate Word Document"):
+if st.button("🚀 Generate PDF Document"):
     # Group by school
     schools = edited_df['School'].unique()
     
@@ -121,11 +132,11 @@ if st.button("🚀 Generate Word Document"):
         school_data = edited_df[edited_df['School'] == school]
         
         if not school_data.empty:
-            docx_file = create_docx(school, school_data.to_dict('records'))
+            pdf_file = create_pdf(school, school_data.to_dict('records'))
             
             st.download_button(
-                label=f"📥 Download {school}.docx",
-                data=docx_file,
-                file_name=f"{school}_Review_{datetime.date.today()}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                label=f"📥 Download {school}.pdf",
+                data=pdf_file,
+                file_name=f"{school}_Review_{datetime.date.today()}.pdf",
+                mime="application/pdf"
             )
