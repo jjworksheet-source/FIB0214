@@ -1,4 +1,4 @@
-import streamlit as st
+can i modify the sentence in this app ?import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
@@ -76,7 +76,7 @@ edited_df = st.data_editor(
     column_config={
         "Select": st.column_config.CheckboxColumn("Generate?", default=True)
     },
-    disabled=["School", "Word", "Content"],
+    disabled=["School", "Word"],
     hide_index=True
 )
 
