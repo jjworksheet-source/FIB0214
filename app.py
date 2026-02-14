@@ -21,13 +21,12 @@ try:
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.enums import TA_CENTER
     
-    # Register a font that supports Chinese if available
-    # Common paths for fonts on Linux/Streamlit Cloud
+    # Register Chinese font from GitHub repo
+    # The Kai.ttf file is in the same directory as app.py
     font_paths = [
+        "Kai.ttf",  # Font uploaded to GitHub repo
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        "TW-Kai-98_1.ttf", # Upload this to your GitHub repo
-        "NotoSansTC-Regular.otf"
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
     ]
     
     CHINESE_FONT = None
@@ -36,23 +35,13 @@ try:
             try:
                 pdfmetrics.registerFont(TTFont('ChineseFont', path))
                 CHINESE_FONT = 'ChineseFont'
+                st.success(f"✅ Font loaded: {path}")
                 break
-            except:
+            except Exception as e:
                 continue
     
     if not CHINESE_FONT:
-        st.warning("⚠️ Chinese font not found. Chinese characters may appear as boxes in the PDF.")
-        uploaded_font = st.file_uploader("📤 Upload Chinese Font (.ttf or .otf)", type=['ttf', 'otf'])
-        if uploaded_font is not None:
-            try:
-                # Save uploaded font to a temporary file to register it
-                with open("temp_font.ttf", "wb") as f:
-                    f.write(uploaded_font.getbuffer())
-                pdfmetrics.registerFont(TTFont('ChineseFont', "temp_font.ttf"))
-                CHINESE_FONT = 'ChineseFont'
-                st.success("✅ Font uploaded and registered successfully!")
-            except Exception as e:
-                st.error(f"❌ Error registering font: {e}")
+        st.error("❌ Chinese font not found. Please ensure Kai.ttf is in your GitHub repository.")
 except ImportError:
     st.error("❌ reportlab not found. Please add 'reportlab' to your requirements.txt")
     st.stop()
