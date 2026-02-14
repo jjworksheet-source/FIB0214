@@ -5,6 +5,7 @@ import pandas as pd
 import datetime
 import io
 import os
+import re
 
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
@@ -163,7 +164,10 @@ def create_pdf(school_name, questions):
     
     # Questions
     for i, row in enumerate(questions):
-        question_text = f"{i+1}. {row['Content']}"
+        content = row['Content']
+        # Convert 【】text【】 to <u>text</u> for underline (專名號)
+        content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
+        question_text = f"{i+1}. {content}"
         p = Paragraph(question_text, normal_style)
         story.append(p)
         story.append(Spacer(1, 0.15*inch))
