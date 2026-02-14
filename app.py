@@ -48,7 +48,7 @@ except Exception as e:
     st.error(f"❌ Configuration Error: {e}")
     st.stop()
 
-# --- 2. HELPER FUNCTIONS (From your original code) ---
+# --- 2. HELPER FUNCTIONS ---
 
 def register_chinese_font():
     """
@@ -271,6 +271,7 @@ with col1:
         for school in schools:
             school_data = edited_df[edited_df['School'] == school]
             if not school_data.empty:
+                # Corrected function call
                 pdf_buffer = PDF Generator(school, school_data.to_dict('records'), font_name)
                 
                 st.download_button(
@@ -295,7 +296,7 @@ with col2:
             for school in schools:
                 school_data = edited_df[edited_df['School'] == school]
                 if not school_data.empty:
-                    # Generate PDF in memory
+                    # Corrected function call
                     pdf_buffer = PDF Generator(school, school_data.to_dict('records'), font_name)
                     filename = f"{school}_Worksheet.pdf"
                     
