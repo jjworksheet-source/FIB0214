@@ -2,19 +2,47 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_CENTER
 import datetime
 import io
+import os
 
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
 st.title("📝 Worksheet Generator")
+
+# Try to import reportlab and handle font registration
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.enums import TA_CENTER
+    
+    # Register a font that supports Chinese if available
+    # Common paths for fonts on Linux/Streamlit Cloud
+    font_paths = [
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        "NotoSansTC-Regular.otf" # If you upload this to your repo
+    ]
+    
+    CHINESE_FONT = None
+    for path in font_paths:
+        if os.path.exists(path):
+    if not CHINESE_FONT:
+        st.warning("⚠️ Chinese font not found. Chinese characters may appear as boxes in the PDF. Please upload a .ttf font file to your repository.")
+
+            try:
+                pdfmetrics.registerFont(TTFont('ChineseFont', path))
+                CHINESE_FONT = 'ChineseFont'
+                break
+            except:
+                continue
+except ImportError:
+    st.error("❌ reportlab not found. Please add 'reportlab' to your requirements.txt")
+    st.stop()
 
 # Load Secrets
 try:
@@ -91,16 +119,25 @@ def create_pdf(school_name, questions):
     
     # Styles
     styles = getSampleStyleSheet()
+    
+    # Use registered Chinese font if found, otherwise fallback
+    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+    
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
+        fontName=font_name,
         fontSize=20,
         alignment=TA_CENTER,
         spaceAfter=12
     )
-    normal_style = styles['Normal']
-    normal_style.fontSize = 14
-    normal_style.leading = 20
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=14,
+        leading=20
+    )
     
     # Title
     title = Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style)
