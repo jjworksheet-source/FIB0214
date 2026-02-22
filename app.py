@@ -6,6 +6,8 @@ import datetime
 import io
 import os
 import re
+import base64
+from pdf2image import convert_from_bytes
 
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
@@ -111,17 +113,15 @@ edited_df = st.data_editor(
     hide_index=True
 )
 
-import base64
-
 # --- 4. GENERATE PDF FUNCTION ---
 def create_pdf(school_name, questions):
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
-    
+
     styles = getSampleStyleSheet()
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-    
+
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -139,57 +139,56 @@ def create_pdf(school_name, questions):
         leftIndent=25,
         firstLineIndent=-25
     )
-    
+
     story.append(Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style))
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(f"Date: {datetime.date.today()}", normal_style))
     story.append(Spacer(1, 0.3*inch))
-    
+
     for i, row in enumerate(questions):
         content = row['Content']
-        # Handle underlines
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         content = re.sub(r'【(.+?)】', r'<u>\1</u>', content)
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
         story.append(Spacer(1, 0.15*inch))
-    
+
     doc.build(story)
     bio.seek(0)
     return bio
 
-# Helper to display PDF in an iframe
-def display_pdf(pdf_bytes):
-    base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600" type="application/pdf"></iframe>'
-    st.markdown(pdf_display, unsafe_allow_html=True)
+# --- Helper: Render PDF pages as images ---
+def display_pdf_as_images(pdf_bytes):
+    try:
+        images = convert_from_bytes(pdf_bytes, dpi=150)
+        for i, image in enumerate(images):
+            st.image(image, caption=f"Page {i+1}", use_container_width=True)
+    except Exception as e:
+        st.error(f"Could not render preview: {e}")
+        st.info("You can still download the PDF using the button on the left.")
 
 # --- 5. PREVIEW & DOWNLOAD INTERFACE ---
 st.divider()
 st.subheader("🚀 Finalize Documents")
 
-# Group by school from the editor
 schools = edited_df['School'].unique() if not edited_df.empty else []
 
-if not schools.any():
+if len(schools) == 0:
     st.info("Select at least one question above to begin.")
 else:
-    # Let teacher select which school to preview
     selected_school = st.selectbox("Select School to Preview/Download", schools)
-    
     school_data = edited_df[edited_df['School'] == selected_school]
-    
-    col1, col2 = st.columns([1, 1])
-    
-    # Generate the PDF once for this school
+
+    col1, col2 = st.columns([1, 2])
+
+    # Generate PDF once — same bytes used for both preview and download
     pdf_buffer = create_pdf(selected_school, school_data.to_dict('records'))
     pdf_bytes = pdf_buffer.getvalue()
 
     with col1:
         st.write(f"**School:** {selected_school}")
         st.write(f"**Questions:** {len(school_data)}")
-        
-        # Download Button
+
         st.download_button(
             label=f"📥 Download {selected_school}.pdf",
             data=pdf_bytes,
@@ -198,9 +197,9 @@ else:
             use_container_width=True,
             key=f"dl_{selected_school}"
         )
-        
-        st.info("💡 If you see a typo, fix it in your Google Sheet, then click 'Refresh Data' at the top.")
+
+        st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
 
     with col2:
-        st.write("🔍 **Live PDF Preview** (100% Accurate)")
-        display_pdf(pdf_bytes)
+        st.write("🔍 **100% Accurate Preview**")
+        display_pdf_as_images(pdf_bytes)
