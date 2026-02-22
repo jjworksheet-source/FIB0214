@@ -142,7 +142,7 @@ def create_pdf(school_name, questions):
 
     story.append(Paragraph(f"<b>{school_name} - 校本填充工作紙</b>", title_style))
     story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph(f"日期: {datetime.date.tomorrow()}", normal_style))
+    story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
     for i, row in enumerate(questions):
