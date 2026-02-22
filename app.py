@@ -140,7 +140,7 @@ def create_pdf(school_name, questions):
         firstLineIndent=-25
     )
 
-    story.append(Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style))
+    story.append(Paragraph(f"<b>{school_name} - 校本填充工作紙</b>", title_style))
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(f"Date: {datetime.date.today()}", normal_style))
     story.append(Spacer(1, 0.3*inch))
