@@ -20,15 +20,13 @@ try:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.enums import TA_CENTER
-    
-    # Register Chinese font from GitHub repo
-    # The Kai.ttf file is in the same directory as app.py
+
     font_paths = [
-        "Kai.ttf",  # Font uploaded to GitHub repo
+        "Kai.ttf",
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"
     ]
-    
+
     CHINESE_FONT = None
     for path in font_paths:
         if os.path.exists(path):
@@ -37,35 +35,32 @@ try:
                 CHINESE_FONT = 'ChineseFont'
                 st.success(f"✅ Font loaded: {path}")
                 break
-            except Exception as e:
+            except Exception:
                 continue
-    
+
     if not CHINESE_FONT:
         st.error("❌ Chinese font not found. Please ensure Kai.ttf is in your GitHub repository.")
+
 except ImportError:
     st.error("❌ reportlab not found. Please add 'reportlab' to your requirements.txt")
     st.stop()
 
-# Load Secrets
+# --- CONNECT TO GOOGLE CLOUD ---
 try:
-    # Construct the credentials dictionary from secrets
     key_dict = st.secrets["gcp_service_account"]
     creds = Credentials.from_service_account_info(
         key_dict,
         scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     )
     client = gspread.authorize(creds)
-    
-    # Get Config
     SHEET_ID = st.secrets["app_config"]["spreadsheet_id"]
-    
     st.success("✅ Connected to Google Cloud!")
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
     st.stop()
 
 # --- 2. READ DATA ---
-@st.cache_data(ttl=60) # Cache for 1 minute so it doesn't reload constantly
+@st.cache_data(ttl=60)
 def load_data():
     try:
         sh = client.open_by_key(SHEET_ID)
@@ -77,14 +72,10 @@ def load_data():
         return pd.DataFrame()
 
 if st.button("🔄 Refresh Data"):
-    st.cache_data.clear()
+    load_data.clear()
     st.rerun()
 
 df = load_data()
-
-st.write("Raw row count:", len(df))
-st.write("Columns:", df.columns.tolist())
-st.write(df.head())
 
 if df.empty:
     st.warning("The 'standby' sheet is empty or could not be read.")
@@ -93,27 +84,24 @@ if df.empty:
 # --- 3. FILTER & SELECT ---
 st.subheader("Select Questions")
 
-# Normalize Status (trim, normalize unicode spaces, force string)
 if "Status" not in df.columns:
     st.error("Column 'Status' not found. Please check your Google Sheet headers.")
-    st.write("Available columns:", df.columns.tolist())
     st.stop()
 
 status_norm = (
     df["Status"]
     .astype(str)
-    .str.replace("\u00A0", " ", regex=False)   # NBSP -> normal space
-    .str.replace("\u3000", " ", regex=False)   # ideographic space -> normal space
+    .str.replace("\u00A0", " ", regex=False)
+    .str.replace("\u3000", " ", regex=False)
     .str.strip()
 )
 
 ready_df = df[status_norm.isin(["Ready", "Waiting"])]
 
-# Debug (keep this until it works)
-st.write("Unique Status values (normalized):", sorted(status_norm.unique().tolist()))
-st.write("Rows after filter:", len(ready_df))
+if ready_df.empty:
+    st.info("No questions with status 'Ready' or 'Waiting'.")
+    st.stop()
 
-# Show data editor
 edited_df = st.data_editor(
     ready_df,
     column_config={
@@ -128,13 +116,10 @@ def create_pdf(school_name, questions):
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
-    
-    # Styles
+
     styles = getSampleStyleSheet()
-    
-    # Use registered Chinese font if found, otherwise fallback
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-    
+
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -143,7 +128,6 @@ def create_pdf(school_name, questions):
         alignment=TA_CENTER,
         spaceAfter=12
     )
-    # Hanging indent style: leftIndent moves the whole block, firstLineIndent moves it back
     normal_style = ParagraphStyle(
         'CustomNormal',
         parent=styles['Normal'],
@@ -153,44 +137,31 @@ def create_pdf(school_name, questions):
         leftIndent=25,
         firstLineIndent=-25
     )
-    
-    # Title
-    title = Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style)
-    story.append(title)
+
+    story.append(Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style))
     story.append(Spacer(1, 0.2*inch))
-    
-    # Date
-    date_text = Paragraph(f"Date: {datetime.date.today()}", normal_style)
-    story.append(date_text)
+    story.append(Paragraph(f"Date: {datetime.date.today()}", normal_style))
     story.append(Spacer(1, 0.3*inch))
-    
-    # Questions
+
     for i, row in enumerate(questions):
         content = row['Content']
-        # Convert 【】text【】 to <u>text</u> for underline (專名號)
-        # This regex handles both 【】text【】 and 【text】 formats
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         content = re.sub(r'【(.+?)】', r'<u>\1</u>', content)
-        question_text = f"{i+1}. {content}"
-        p = Paragraph(question_text, normal_style)
+        p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
         story.append(Spacer(1, 0.15*inch))
-    
-    # Build PDF
+
     doc.build(story)
     bio.seek(0)
     return bio
 
+# --- 5. GENERATE & DOWNLOAD ---
 if st.button("🚀 Generate PDF Document"):
-    # Group by school
     schools = edited_df['School'].unique()
-    
     for school in schools:
         school_data = edited_df[edited_df['School'] == school]
-        
         if not school_data.empty:
             pdf_file = create_pdf(school, school_data.to_dict('records'))
-            
             st.download_button(
                 label=f"📥 Download {school}.pdf",
                 data=pdf_file,
