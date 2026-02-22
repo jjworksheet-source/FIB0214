@@ -4,3 +4,5 @@ gspread
 google-auth
 python-docx
 reportlab
+pdf2image
+pillow
