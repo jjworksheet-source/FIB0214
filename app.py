@@ -93,19 +93,25 @@ if df.empty:
 # --- 3. FILTER & SELECT ---
 st.subheader("Select Questions")
 
-# Filter for 'Ready' status
-# We look for columns: 'School', 'Word', 'Type', 'Content', 'Status'
-try:
-    # Filter rows where Status is 'Ready' or 'Waiting'
-    ready_df = df[df['Status'].isin(['Ready', 'Waiting'])]
-except KeyError:
+# Normalize Status (trim, normalize unicode spaces, force string)
+if "Status" not in df.columns:
     st.error("Column 'Status' not found. Please check your Google Sheet headers.")
     st.write("Available columns:", df.columns.tolist())
     st.stop()
 
-if ready_df.empty:
-    st.info("No questions with status 'Ready' or 'Waiting'.")
-    st.stop()
+status_norm = (
+    df["Status"]
+    .astype(str)
+    .str.replace("\u00A0", " ", regex=False)   # NBSP -> normal space
+    .str.replace("\u3000", " ", regex=False)   # ideographic space -> normal space
+    .str.strip()
+)
+
+ready_df = df[status_norm.isin(["Ready", "Waiting"])]
+
+# Debug (keep this until it works)
+st.write("Unique Status values (normalized):", sorted(status_norm.unique().tolist()))
+st.write("Rows after filter:", len(ready_df))
 
 # Show data editor
 edited_df = st.data_editor(
