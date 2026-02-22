@@ -82,6 +82,10 @@ if st.button("🔄 Refresh Data"):
 
 df = load_data()
 
+st.write("Raw row count:", len(df))
+st.write("Columns:", df.columns.tolist())
+st.write(df.head())
+
 if df.empty:
     st.warning("The 'standby' sheet is empty or could not be read.")
     st.stop()
