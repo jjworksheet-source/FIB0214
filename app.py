@@ -90,6 +90,23 @@ if "Status" not in df.columns:
     st.error("Column 'Status' not found. Please check your Google Sheet headers.")
     st.stop()
 
+if "level" not in df.columns and "Level" not in df.columns:
+    st.error("Column 'Level' not found. Please check your Google Sheet headers.")
+    st.stop()
+
+# Normalize column name to 'Level'
+df.columns = [c.strip() for c in df.columns]
+level_col = "Level" if "Level" in df.columns else "level"
+df = df.rename(columns={level_col: "Level"})
+
+# --- Sidebar: Level Filter ---
+with st.sidebar:
+    st.header("🎓 篩選年級")
+    available_levels = sorted(df["Level"].astype(str).str.strip().unique().tolist())
+    selected_level = st.radio("選擇年級", available_levels, index=0)
+    st.divider()
+    st.info(f"目前顯示：**{selected_level}** 的題目")
+
 status_norm = (
     df["Status"]
     .astype(str)
@@ -98,10 +115,12 @@ status_norm = (
     .str.strip()
 )
 
-ready_df = df[status_norm.isin(["Ready", "Waiting"])]
+# Filter by both Status and Level
+level_norm = df["Level"].astype(str).str.strip()
+ready_df = df[status_norm.isin(["Ready", "Waiting"]) & (level_norm == selected_level)]
 
 if ready_df.empty:
-    st.info("No questions with status 'Ready' or 'Waiting'.")
+    st.info(f"No questions with status 'Ready' or 'Waiting' for {selected_level}.")
     st.stop()
 
 edited_df = st.data_editor(
@@ -109,12 +128,12 @@ edited_df = st.data_editor(
     column_config={
         "Select": st.column_config.CheckboxColumn("Generate?", default=True)
     },
-    disabled=["School", "Word"],
+    disabled=["School", "Level", "Word"],
     hide_index=True
 )
 
 # --- 4. GENERATE PDF FUNCTION ---
-def create_pdf(school_name, questions):
+def create_pdf(school_name, level, questions):
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
@@ -140,7 +159,7 @@ def create_pdf(school_name, questions):
         firstLineIndent=-25
     )
 
-    story.append(Paragraph(f"<b>{school_name} - 校本填充工作紙</b>", title_style))
+    story.append(Paragraph(f"<b>{school_name} ({level}) - 校本填充工作紙</b>", title_style))
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
@@ -182,20 +201,21 @@ else:
     col1, col2 = st.columns([1, 2])
 
     # Generate PDF once — same bytes used for both preview and download
-    pdf_buffer = create_pdf(selected_school, school_data.to_dict('records'))
+    pdf_buffer = create_pdf(selected_school, selected_level, school_data.to_dict('records'))
     pdf_bytes = pdf_buffer.getvalue()
 
     with col1:
         st.write(f"**School:** {selected_school}")
+        st.write(f"**Level:** {selected_level}")
         st.write(f"**Questions:** {len(school_data)}")
 
         st.download_button(
-            label=f"📥 Download {selected_school}.pdf",
+            label=f"📥 Download {selected_school}_{selected_level}.pdf",
             data=pdf_bytes,
-            file_name=f"{selected_school}_Review_{datetime.date.today()}.pdf",
+            file_name=f"{selected_school}_{selected_level}_Review_{datetime.date.today()}.pdf",
             mime="application/pdf",
             use_container_width=True,
-            key=f"dl_{selected_school}"
+            key=f"dl_{selected_school}_{selected_level}"
         )
 
         st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
