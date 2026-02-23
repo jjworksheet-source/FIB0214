@@ -406,10 +406,7 @@ else:
                     success, msg = send_email_with_pdf(
                         parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
                     )
-                    if success:
-                        st.success(f"✅ 已成功寄送！")
-                    else:
-                        st.error(f"❌ 發送失敗: {msg}")
+                    python    st.code(msg)  # ← ADD THIS ONE LINE
 
         with col2:
             st.write("🔍 **100% 準確預覽**")
