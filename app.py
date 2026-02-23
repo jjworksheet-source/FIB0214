@@ -348,35 +348,50 @@ with col_main:
         st.info("此學校/年級沒有待處理的詞語。")
         st.stop()
 
-    # --- Session state: store final chosen sentences ---
-    # Key: timestamp, Value: final sentence string
+    # --- Session state: store final chosen sentences + confirmed AI set ---
     if "chosen" not in st.session_state:
         st.session_state["chosen"] = {}
+    if "approved" not in st.session_state:
+        st.session_state["approved"] = set()
 
-    # Reset chosen if school/level changed
+    # Reset if school/level changed
     state_key = f"{sel_sch}_{sel_lvl}"
     if st.session_state.get("last_lot") != state_key:
-        st.session_state["chosen"] = {}
+        st.session_state["chosen"]   = {}
+        st.session_state["approved"] = set()
         st.session_state["last_lot"] = state_key
 
     words = lot_df["詞語"].unique().tolist()
-    all_ready = True   # track if all AI words have been approved
+
+    # Collect all AI word timestamps that need explicit confirmation
+    ai_timestamps = [
+        str(lot_df[lot_df["詞語"] == w].iloc[0]["Timestamp"]).strip()
+        for w in words
+        if str(lot_df[lot_df["詞語"] == w].iloc[0]["來源"]).strip() != "DB"
+    ]
+    all_ready = all(t in st.session_state["approved"] for t in ai_timestamps) \
+                if ai_timestamps else True
+
+    # Progress bar for AI approvals
+    if ai_timestamps:
+        n_done = len([t for t in ai_timestamps if t in st.session_state["approved"]])
+        st.progress(n_done / len(ai_timestamps),
+                    text=f"AI 句子確認進度：{n_done} / {len(ai_timestamps)} 已確認")
 
     for word in words:
         word_rows = lot_df[lot_df["詞語"] == word]
         source    = str(word_rows.iloc[0]["來源"]).strip()
-        status    = str(word_rows.iloc[0]["狀態"]).strip()
         ts        = str(word_rows.iloc[0]["Timestamp"]).strip()
-        # Use DataFrame index as unique key suffix to avoid duplicate key errors
-        row_idx   = word_rows.index[0]
+        row_idx   = word_rows.index[0]          # unique per row, avoids duplicate key
+        confirmed = ts in st.session_state["approved"]
 
+        # Badge
         if source == "DB":
             badge = '<span class="badge-db">📗 資料庫</span>'
-        elif status == "Pending":
-            badge = '<span class="badge-pending">⏳ AI 待審批</span>'
-            all_ready = False
+        elif confirmed:
+            badge = '<span class="badge-ai">✅ AI 已確認</span>'
         else:
-            badge = '<span class="badge-ai">🤖 AI 已審批</span>'
+            badge = '<span class="badge-pending">⏳ AI 待確認</span>'
 
         st.markdown(f"""
         <div class="word-card">
@@ -385,31 +400,44 @@ with col_main:
         """, unsafe_allow_html=True)
 
         if source == "DB":
-            # DB: single sentence, editable, auto-approved
+            # DB sentence — editable text area, auto-confirmed
             sentence = str(word_rows.iloc[0]["句子"]).strip()
             final = st.text_area(
-                f"句子（可修改）", value=sentence,
+                "句子（可修改）", value=sentence,
                 key=f"db_{row_idx}", height=75, label_visibility="collapsed"
             )
             st.session_state["chosen"][ts] = final
 
         else:
-            # AI: radio select among options + optional manual override
+            # AI sentence — radio + optional manual override + confirm button
             options = word_rows["句子"].astype(str).tolist()
             chosen_opt = st.radio(
                 "選擇 AI 句子", options,
-                key=f"rad_{row_idx}", horizontal=False
+                key=f"rad_{row_idx}", horizontal=False,
+                disabled=confirmed
             )
             override = st.text_input(
                 "✏️ 手動輸入（留空則使用上方選擇）",
                 value="", placeholder=chosen_opt,
-                key=f"ovr_{row_idx}"
+                key=f"ovr_{row_idx}",
+                disabled=confirmed
             )
             final = override.strip() if override.strip() else chosen_opt
-            st.session_state["chosen"][ts] = final
 
-            if status == "Pending":
-                all_ready = False   # still needs explicit approval
+            if not confirmed:
+                if st.button(f"✅ 確認「{word}」的句子",
+                             key=f"confirm_{row_idx}",
+                             type="primary", use_container_width=True):
+                    st.session_state["chosen"][ts]   = final
+                    st.session_state["approved"].add(ts)
+                    st.rerun()
+            else:
+                # Show locked confirmed sentence + undo option
+                st.success(f"✔ 已確認：{st.session_state['chosen'].get(ts, final)}")
+                if st.button(f"↩️ 重新選擇「{word}」",
+                             key=f"undo_{row_idx}", use_container_width=True):
+                    st.session_state["approved"].discard(ts)
+                    st.rerun()
 
         st.write("")  # spacing
 
