@@ -64,22 +64,19 @@ except Exception as e:
     st.error(f"❌ Connection Error: {e}")
     st.stop()
 
+# --- 2. DATA LOADING ---
+
 @st.cache_data(ttl=60)
-def load_data():
+def load_review_data():
+    """讀取 Review 工作表（草稿/審批區）"""
     try:
         sh = client.open_by_key(SHEET_ID)
-        worksheet = sh.worksheet("Review")  # ✅ 改讀 Review
+        worksheet = sh.worksheet("Review")
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
-
         if df.empty:
             return df
-
-        # ✅ 清理欄名
         df.columns = [c.strip() for c in df.columns]
-
-        # ✅ 你的 Review 欄位：Timestamp, 學校, 年級, 詞語, 句子, 來源, 狀態
-        # ✅ 轉成你現有流程使用的欄位名
         rename_map = {
             "學校": "School",
             "年級": "Level",
@@ -90,11 +87,31 @@ def load_data():
             "Timestamp": "Timestamp",
         }
         df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
-
+        for col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.strip()
         return df
-
     except Exception as e:
         st.error(f"Error reading Review sheet: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def load_standby_data():
+    """讀取 standby 工作表（正式題庫，用於生成 PDF）"""
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        worksheet = sh.worksheet("standby")
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        if df.empty:
+            return df
+        df.columns = [c.strip() for c in df.columns]
+        for col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.strip()
+        return df
+    except Exception as e:
+        st.error(f"Error reading standby sheet: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=60)
@@ -103,93 +120,82 @@ def load_students():
         sh = client.open_by_key(SHEET_ID)
         worksheet = sh.worksheet("學生資料")
         data = worksheet.get_all_records()
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+        if not df.empty:
+            df.columns = [c.strip() for c in df.columns]
+            for col in df.columns:
+                if df[col].dtype == object:
+                    df[col] = df[col].astype(str).str.strip()
+        return df
     except Exception as e:
         st.error(f"Error reading 學生資料 sheet: {e}")
         return pd.DataFrame()
 
 if st.button("🔄 Refresh Data"):
-    load_data.clear()
+    load_review_data.clear()
+    load_standby_data.clear()
     load_students.clear()
     st.rerun()
 
-df = load_data()
-student_df = load_students()
+# --- 3. HELPER: WRITE TO GOOGLE SHEETS ---
 
-if df.empty:
-    st.warning("The 'standby' sheet is empty or could not be read.")
-    st.stop()
+def transfer_to_standby(selected_rows_df):
+    """將審批通過的句子從 Review 移交至 standby"""
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        standby_ws = sh.worksheet("standby")
+        review_ws = sh.worksheet("Review")
 
-# --- 3. FILTER & SELECT ---
-st.subheader("Select Questions")
+        new_standby_data = []
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-if "Status" not in df.columns:
-    st.error("Column 'Status' not found. Please check your Google Sheet headers.")
-    st.stop()
+        for _, row in selected_rows_df.iterrows():
+            unique_id = f"{str(row['School'])[:4]}_{datetime.datetime.now().strftime('%S%f')[-6:]}_{row['Word']}_f"
+            # standby 欄位: ID, School, Grade, Word, Type, Content, Answer, Status, Date
+            new_row = [
+                unique_id,
+                row['School'],
+                row['Level'],
+                row['Word'],
+                "填空題",
+                row['EditedContent'],  # 使用 Admin 修改後的句子
+                row['Word'],           # Answer = 詞語本身
+                "Ready",
+                now_str
+            ]
+            new_standby_data.append(new_row)
 
-if "level" not in df.columns and "Level" not in df.columns:
-    st.error("Column 'Level' not found. Please check your Google Sheet headers.")
-    st.stop()
+        if new_standby_data:
+            standby_ws.append_rows(new_standby_data)
 
-# Normalize column names
-df.columns = [c.strip() for c in df.columns]
-level_col = "Level" if "Level" in df.columns else "level"
-df = df.rename(columns={level_col: "Level"})
+            # 在 Review 表中把已移交的行標記為 Transferred
+            # 用 (Timestamp, School, Level, Word, Content) 找回列號
+            all_values = review_ws.get_all_values()
+            key_to_row = {}
+            for i, r in enumerate(all_values[1:], start=2):
+                r = r + [""] * (7 - len(r))
+                k = (r[0].strip(), r[1].strip(), r[2].strip(), r[3].strip(), r[4].strip())
+                if k not in key_to_row:
+                    key_to_row[k] = i
 
-# Clean student_df column names
-if not student_df.empty:
-    student_df.columns = [c.strip() for c in student_df.columns]
-    for col in student_df.columns:
-        if student_df[col].dtype == object:
-            student_df[col] = student_df[col].astype(str).str.strip()
+            for _, row in selected_rows_df.iterrows():
+                k = (
+                    str(row['Timestamp']).strip(),
+                    str(row['School']).strip(),
+                    str(row['Level']).strip(),
+                    str(row['Word']).strip(),
+                    str(row['Content']).strip()
+                )
+                row_index = key_to_row.get(k)
+                if row_index:
+                    review_ws.update_cell(row_index, 7, "Transferred")  # G欄: 狀態
 
-# Clean standby df
-for col in df.columns:
-    if df[col].dtype == object:
-        df[col] = df[col].astype(str).str.strip()
+            return True, len(new_standby_data)
+    except Exception as e:
+        return False, str(e)
 
-# --- Sidebar: Level Filter ---
-with st.sidebar:
-    st.header("🎓 篩選年級")
-    available_levels = sorted(df["Level"].astype(str).str.strip().unique().tolist())
-    selected_level = st.radio("選擇年級", available_levels, index=0)
-    st.divider()
-    st.info(f"目前顯示：**{selected_level}** 的題目")
+# --- 4. PDF GENERATION ---
 
-    # --- Sidebar: Mode Toggle ---
-    st.divider()
-    st.header("📬 發送模式")
-    send_mode = st.radio(
-        "選擇模式",
-        ["📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送 (配對學生資料)"],
-        index=0
-    )
-
-status_norm = (
-    df["Status"]
-    .astype(str)
-    .str.replace("\u00A0", " ", regex=False)
-    .str.replace("\u3000", " ", regex=False)
-    .str.strip()
-)
-
-level_norm = df["Level"].astype(str).str.strip()
-ready_df = df[status_norm.isin(["Ready", "Waiting"]) & (level_norm == selected_level)]
-
-if ready_df.empty:
-    st.info(f"No questions with status 'Ready' or 'Waiting' for {selected_level}.")
-    st.stop()
-
-edited_df = st.data_editor(
-    ready_df,
-    column_config={
-        "Select": st.column_config.CheckboxColumn("Generate?", default=True)
-    },
-    disabled=["School", "Level", "Word"],
-    hide_index=True
-)
-
-# --- 4. GENERATE PDF FUNCTION ---
 def create_pdf(school_name, level, questions, student_name=None):
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
@@ -222,36 +228,32 @@ def create_pdf(school_name, level, questions, student_name=None):
         title_text = f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
 
     story.append(Paragraph(title_text, title_style))
-    story.append(Spacer(1, 0.2*inch))
+    story.append(Spacer(1, 0.2 * inch))
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
-    story.append(Spacer(1, 0.3*inch))
+    story.append(Spacer(1, 0.3 * inch))
 
     for i, row in enumerate(questions):
         content = row['Content']
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         content = re.sub(r'【(.+?)】', r'<u>\1</u>', content)
-        p = Paragraph(f"{i+1}. {content}", normal_style)
+        p = Paragraph(f"{i + 1}. {content}", normal_style)
         story.append(p)
-        story.append(Spacer(1, 0.15*inch))
+        story.append(Spacer(1, 0.15 * inch))
 
     doc.build(story)
     bio.seek(0)
     return bio
 
-# --- SendGrid Email Function (FIXED) ---
+# --- 5. EMAIL ---
+
 def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
     try:
         sg_config = st.secrets["sendgrid"]
-
-        # --- CLEAN & VALIDATE RECIPIENT ---
         recipient = str(to_email).strip()
         if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
             return False, f"無效的家長電郵格式: '{recipient}'"
 
-        # --- BUILD MESSAGE (use Email object, not tuple) ---
         from_email_obj = Email(sg_config["from_email"], sg_config.get("from_name", ""))
-
-        # Clean student name for filename (remove non-ASCII)
         safe_name = re.sub(r'[^\w\-]', '_', str(student_name).strip())
 
         message = Mail(
@@ -266,13 +268,11 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             """
         )
 
-        # --- CLEAN & VALIDATE CC ---
         if cc_email:
             cc_clean = str(cc_email).strip().lower()
             if cc_clean not in ["n/a", "nan", "", "none"] and "@" in cc_clean and cc_clean != recipient.lower():
                 message.add_cc(cc_clean)
 
-        # --- ATTACHMENT ---
         encoded_pdf = base64.b64encode(pdf_bytes).decode()
         attachment = Attachment(
             FileContent(encoded_pdf),
@@ -282,7 +282,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         )
         message.add_attachment(attachment)
 
-        # --- SEND ---
         sg = SendGridAPIClient(sg_config["api_key"])
         response = sg.send(message)
 
@@ -292,7 +291,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             return False, f"SendGrid Error: {response.status_code}"
 
     except HTTPError as e:
-        # Shows the REAL detailed error from SendGrid
         try:
             return False, e.body.decode("utf-8")
         except Exception:
@@ -300,17 +298,177 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
     except Exception as e:
         return False, str(e)
 
-# --- Helper: Render PDF pages as images ---
+# --- 6. PDF PREVIEW ---
+
 def display_pdf_as_images(pdf_bytes):
     try:
         images = convert_from_bytes(pdf_bytes, dpi=150)
         for i, image in enumerate(images):
-            st.image(image, caption=f"Page {i+1}", use_container_width=True)
+            st.image(image, caption=f"Page {i + 1}", use_container_width=True)
     except Exception as e:
         st.error(f"Could not render preview: {e}")
         st.info("You can still download the PDF using the button on the left.")
 
-# --- 5. PREVIEW & DOWNLOAD INTERFACE ---
+# ============================================================
+# SECTION A: 審批區 (Review → Standby)
+# ============================================================
+st.markdown("---")
+st.header("📥 Step 1：審批新詞語")
+st.caption("從 Review 表讀取新詞，選擇/修改句子後移交至 Standby 題庫")
+
+review_df = load_review_data()
+
+if review_df.empty:
+    st.info("✅ Review 表目前沒有新資料。")
+else:
+    # --- Sidebar ---
+    with st.sidebar:
+        st.header("🎓 篩選年級")
+        available_levels_review = sorted(review_df["Level"].astype(str).str.strip().unique().tolist())
+        selected_level_review = st.radio("審批年級", available_levels_review, index=0, key="review_level")
+        st.divider()
+
+    # 篩選選定年級，且尚未移交的資料
+    review_filtered = review_df[
+        (review_df["Level"].astype(str).str.strip() == selected_level_review) &
+        (~review_df["Status"].astype(str).str.strip().isin(["Transferred"]))
+    ].copy()
+
+    if review_filtered.empty:
+        st.info(f"✅ {selected_level_review} 的所有詞語已審批完畢。")
+    else:
+        # 分開顯示 DB (Ready) 和 AI (Pending)
+        db_df = review_filtered[review_filtered["Source"].astype(str).str.strip() == "DB"].copy()
+        ai_df = review_filtered[review_filtered["Source"].astype(str).str.strip() == "AI"].copy()
+
+        # --- DB 句子（直接確認）---
+        if not db_df.empty:
+            st.subheader("🟢 資料庫句子 (DB) — 建議直接移交")
+            db_df.insert(0, "移交?", True)
+            db_df["EditedContent"] = db_df["Content"]
+            edited_db = st.data_editor(
+                db_df[["移交?", "Timestamp", "School", "Level", "Word", "Content", "EditedContent", "Source", "Status"]],
+                key="db_editor",
+                hide_index=True,
+                column_config={
+                    "移交?": st.column_config.CheckboxColumn("移交?", default=True),
+                    "EditedContent": st.column_config.TextColumn("句子（可修改）"),
+                },
+                disabled=["Timestamp", "School", "Level", "Word", "Content", "Source", "Status"]
+            )
+        else:
+            edited_db = pd.DataFrame()
+
+        # --- AI 句子（需審批）---
+        if not ai_df.empty:
+            st.subheader("🟨 AI 生成句子 (Pending) — 請選擇或修改")
+            st.caption("每個詞語可能有 3 個 AI 句子選項，請勾選你想要的（可只選 1 個），並可在「句子（可修改）」欄直接改寫。")
+            ai_df.insert(0, "移交?", False)
+            ai_df["EditedContent"] = ai_df["Content"]
+            edited_ai = st.data_editor(
+                ai_df[["移交?", "Timestamp", "School", "Level", "Word", "Content", "EditedContent", "Source", "Status"]],
+                key="ai_editor",
+                hide_index=True,
+                column_config={
+                    "移交?": st.column_config.CheckboxColumn("移交?", default=False),
+                    "EditedContent": st.column_config.TextColumn("句子（可修改/手動輸入）"),
+                },
+                disabled=["Timestamp", "School", "Level", "Word", "Content", "Source", "Status"]
+            )
+        else:
+            edited_ai = pd.DataFrame()
+
+        # --- 移交按鈕 ---
+        st.divider()
+        if st.button("🚀 確認移交至 Standby 題庫", use_container_width=True, type="primary"):
+            # 合併 DB 和 AI 中勾選的行
+            to_transfer_list = []
+
+            if not edited_db.empty:
+                to_transfer_list.append(edited_db[edited_db["移交?"] == True])
+            if not edited_ai.empty:
+                to_transfer_list.append(edited_ai[edited_ai["移交?"] == True])
+
+            if to_transfer_list:
+                to_transfer = pd.concat(to_transfer_list, ignore_index=True)
+            else:
+                to_transfer = pd.DataFrame()
+
+            if to_transfer.empty:
+                st.warning("⚠️ 請先勾選至少一行再移交。")
+            else:
+                with st.spinner("正在移交資料至 Standby..."):
+                    success, result = transfer_to_standby(to_transfer)
+                    if success:
+                        st.success(f"✅ 成功移交 {result} 筆資料至 Standby！請按「🔄 Refresh Data」重新載入。")
+                        load_review_data.clear()
+                        load_standby_data.clear()
+                    else:
+                        st.error(f"❌ 移交失敗：{result}")
+
+# ============================================================
+# SECTION B: 生成 PDF（從 Standby 讀取）
+# ============================================================
+st.markdown("---")
+st.header("📄 Step 2：生成工作紙")
+st.caption("從 Standby 題庫讀取 Ready 的題目，生成 PDF 並寄送")
+
+standby_df = load_standby_data()
+student_df = load_students()
+
+if standby_df.empty:
+    st.info("Standby 題庫目前是空的，請先完成 Step 1 的審批移交。")
+    st.stop()
+
+if "Status" not in standby_df.columns:
+    st.error("Standby 表缺少 'Status' 欄位。")
+    st.stop()
+
+if "Level" not in standby_df.columns and "level" not in standby_df.columns:
+    st.error("Standby 表缺少 'Level' 欄位。")
+    st.stop()
+
+level_col = "Level" if "Level" in standby_df.columns else "level"
+standby_df = standby_df.rename(columns={level_col: "Level"})
+
+# --- Sidebar: Level + Mode ---
+with st.sidebar:
+    st.divider()
+    st.header("📄 生成設定")
+    available_levels_standby = sorted(standby_df["Level"].astype(str).str.strip().unique().tolist())
+    selected_level = st.radio("生成年級", available_levels_standby, index=0, key="standby_level")
+    st.divider()
+    st.header("📬 發送模式")
+    send_mode = st.radio(
+        "選擇模式",
+        ["📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送"],
+        index=0
+    )
+
+status_norm = (
+    standby_df["Status"]
+    .astype(str)
+    .str.replace("\u00A0", " ", regex=False)
+    .str.replace("\u3000", " ", regex=False)
+    .str.strip()
+)
+level_norm = standby_df["Level"].astype(str).str.strip()
+ready_df = standby_df[status_norm.isin(["Ready", "Waiting"]) & (level_norm == selected_level)]
+
+if ready_df.empty:
+    st.info(f"Standby 中沒有 {selected_level} 的 Ready/Waiting 題目。")
+    st.stop()
+
+st.subheader("📋 選擇題目")
+edited_df = st.data_editor(
+    ready_df,
+    column_config={
+        "Select": st.column_config.CheckboxColumn("Generate?", default=True)
+    },
+    disabled=["School", "Level", "Word"],
+    hide_index=True
+)
+
 st.divider()
 st.subheader("🚀 Finalize Documents")
 
@@ -321,34 +479,31 @@ if send_mode == "📄 按學校預覽下載":
     schools = edited_df['School'].unique() if not edited_df.empty else []
 
     if len(schools) == 0:
-        st.info("Select at least one question above to begin.")
+        st.info("請先在上方選擇題目。")
     else:
-        selected_school = st.selectbox("Select School to Preview/Download", schools)
+        selected_school = st.selectbox("選擇學校預覽/下載", schools)
         school_data = edited_df[edited_df['School'] == selected_school]
 
         col1, col2 = st.columns([1, 2])
-
         pdf_buffer = create_pdf(selected_school, selected_level, school_data.to_dict('records'))
         pdf_bytes = pdf_buffer.getvalue()
 
         with col1:
-            st.write(f"**School:** {selected_school}")
-            st.write(f"**Level:** {selected_level}")
-            st.write(f"**Questions:** {len(school_data)}")
-
+            st.write(f"**學校：** {selected_school}")
+            st.write(f"**年級：** {selected_level}")
+            st.write(f"**題目數：** {len(school_data)}")
             st.download_button(
-                label=f"📥 Download {selected_school}_{selected_level}.pdf",
+                label=f"📥 下載 {selected_school}_{selected_level}.pdf",
                 data=pdf_bytes,
                 file_name=f"{selected_school}_{selected_level}_Review_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_{selected_school}_{selected_level}"
             )
-
-            st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
+            st.info("💡 如需修改句子，請在 Google Sheet 更改後按「🔄 Refresh Data」。")
 
         with col2:
-            st.write("🔍 **100% Accurate Preview**")
+            st.write("🔍 **PDF 預覽**")
             display_pdf_as_images(pdf_bytes)
 
 # ============================================================
@@ -358,7 +513,7 @@ else:
     st.subheader("👨‍👩‍👧 學生配對結果")
 
     if student_df.empty:
-        st.error("❌ 無法讀取「學生資料」工作表，請確認工作表名稱正確。")
+        st.error("❌ 無法讀取「學生資料」工作表。")
         st.stop()
 
     required_cols = ['學校', '年級', '狀態', '學生姓名', '家長 Email']
@@ -371,7 +526,7 @@ else:
     active_students = student_df[student_df['狀態'] == 'Y']
 
     if active_students.empty:
-        st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。請先將測試學生的狀態改為 Y。")
+        st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。")
         st.stop()
 
     merged = active_students.merge(
@@ -382,14 +537,10 @@ else:
     )
 
     if merged.empty:
-        st.warning("⚠️ 沒有符合條件的配對。請確認：")
-        st.write("1. `standby` 表有 Status = Ready/Waiting 的題目")
-        st.write("2. `學生資料` 表有 狀態 = Y 的學生")
-        st.write("3. 學校名稱和年級在兩張表中**完全一致**（注意空格/全半形）")
-
+        st.warning("⚠️ 沒有符合條件的配對。")
         with st.expander("🔍 查看配對資料（協助排查問題）"):
-            st.write("**standby 的 School 值：**", edited_df['School'].unique().tolist())
-            st.write("**standby 的 Level 值：**", edited_df['Level'].unique().tolist())
+            st.write("**Standby 的 School 值：**", edited_df['School'].unique().tolist())
+            st.write("**Standby 的 Level 值：**", edited_df['Level'].unique().tolist())
             st.write("**學生資料 的 學校 值：**", active_students['學校'].unique().tolist())
             st.write("**學生資料 的 年級 值：**", active_students['年級'].unique().tolist())
         st.stop()
