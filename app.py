@@ -64,16 +64,37 @@ except Exception as e:
     st.error(f"❌ Connection Error: {e}")
     st.stop()
 
-# --- 2. READ DATA ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
         sh = client.open_by_key(SHEET_ID)
-        worksheet = sh.worksheet("standby")
+        worksheet = sh.worksheet("Review")  # ✅ 改讀 Review
         data = worksheet.get_all_records()
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+
+        if df.empty:
+            return df
+
+        # ✅ 清理欄名
+        df.columns = [c.strip() for c in df.columns]
+
+        # ✅ 你的 Review 欄位：Timestamp, 學校, 年級, 詞語, 句子, 來源, 狀態
+        # ✅ 轉成你現有流程使用的欄位名
+        rename_map = {
+            "學校": "School",
+            "年級": "Level",
+            "詞語": "Word",
+            "句子": "Content",
+            "狀態": "Status",
+            "來源": "Source",
+            "Timestamp": "Timestamp",
+        }
+        df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+
+        return df
+
     except Exception as e:
-        st.error(f"Error reading standby sheet: {e}")
+        st.error(f"Error reading Review sheet: {e}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=60)
