@@ -16,7 +16,6 @@ from python_http_client.exceptions import HTTPError
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
 st.title("📝 Worksheet Generator")
 
-# Try to import reportlab and handle font registration
 try:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -127,7 +126,7 @@ for col in df.columns:
     if df[col].dtype == object:
         df[col] = df[col].astype(str).str.strip()
 
-# --- Sidebar: Level Filter ---
+# --- Sidebar ---
 with st.sidebar:
     st.header("🎓 篩選年級")
     available_levels = sorted(df["Level"].astype(str).str.strip().unique().tolist())
@@ -135,7 +134,6 @@ with st.sidebar:
     st.divider()
     st.info(f"目前顯示：**{selected_level}** 的題目")
 
-    # --- Sidebar: Mode Toggle ---
     st.divider()
     st.header("📬 發送模式")
     send_mode = st.radio(
@@ -217,20 +215,16 @@ def create_pdf(school_name, level, questions, student_name=None):
     bio.seek(0)
     return bio
 
-# --- SendGrid Email Function (FIXED) ---
+# --- SendGrid Email Function ---
 def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
     try:
         sg_config = st.secrets["sendgrid"]
 
-        # --- CLEAN & VALIDATE RECIPIENT ---
         recipient = str(to_email).strip()
         if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
             return False, f"無效的家長電郵格式: '{recipient}'"
 
-        # --- BUILD MESSAGE (use Email object, not tuple) ---
         from_email_obj = Email(sg_config["from_email"], sg_config.get("from_name", ""))
-
-        # Clean student name for filename (remove non-ASCII)
         safe_name = re.sub(r'[^\w\-]', '_', str(student_name).strip())
 
         message = Mail(
@@ -245,13 +239,11 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             """
         )
 
-        # --- CLEAN & VALIDATE CC ---
         if cc_email:
             cc_clean = str(cc_email).strip().lower()
             if cc_clean not in ["n/a", "nan", "", "none"] and "@" in cc_clean and cc_clean != recipient.lower():
                 message.add_cc(cc_clean)
 
-        # --- ATTACHMENT ---
         encoded_pdf = base64.b64encode(pdf_bytes).decode()
         attachment = Attachment(
             FileContent(encoded_pdf),
@@ -261,7 +253,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         )
         message.add_attachment(attachment)
 
-        # --- SEND ---
         sg = SendGridAPIClient(sg_config["api_key"])
         response = sg.send(message)
 
@@ -271,7 +262,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             return False, f"SendGrid Error: {response.status_code}"
 
     except HTTPError as e:
-        # Shows the REAL detailed error from SendGrid
         try:
             return False, e.body.decode("utf-8")
         except Exception:
@@ -297,14 +287,24 @@ st.subheader("🚀 Finalize Documents")
 # MODE A: 按學校預覽下載
 # ============================================================
 if send_mode == "📄 按學校預覽下載":
-    schools = edited_df['School'].unique() if not edited_df.empty else []
+    schools = sorted(edited_df['School'].unique().tolist()) if not edited_df.empty else []
 
     if len(schools) == 0:
         st.info("Select at least one question above to begin.")
     else:
-        selected_school = st.selectbox("Select School to Preview/Download", schools)
-        school_data = edited_df[edited_df['School'] == selected_school]
+        # Fix: use session_state to remember selected school
+        if "selected_school" not in st.session_state or st.session_state.selected_school not in schools:
+            st.session_state.selected_school = schools[0]
 
+        selected_school = st.selectbox(
+            "Select School to Preview/Download",
+            schools,
+            index=schools.index(st.session_state.selected_school),
+            key="school_selectbox"
+        )
+        st.session_state.selected_school = selected_school
+
+        school_data = edited_df[edited_df['School'] == selected_school]
         col1, col2 = st.columns([1, 2])
 
         pdf_buffer = create_pdf(selected_school, selected_level, school_data.to_dict('records'))
@@ -323,7 +323,6 @@ if send_mode == "📄 按學校預覽下載":
                 use_container_width=True,
                 key=f"dl_{selected_school}_{selected_level}"
             )
-
             st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
 
         with col2:
@@ -331,89 +330,150 @@ if send_mode == "📄 按學校預覽下載":
             display_pdf_as_images(pdf_bytes)
 
 # ============================================================
-# MODE B: 按學生寄送
+# MODE B: 按學生寄送 (NEW LOGIC)
 # ============================================================
 else:
-    st.subheader("👨‍👩‍👧 學生配對結果")
+    st.subheader("👨‍👩‍👧 選擇學生寄送")
 
     if student_df.empty:
         st.error("❌ 無法讀取「學生資料」工作表，請確認工作表名稱正確。")
         st.stop()
 
-    required_cols = ['學校', '年級', '狀態', '學生姓名', '家長 Email']
+    # Check required columns (removed 狀態 as per your request)
+    required_cols = ['學校', '年級', '學生姓名', '家長 Email']
     missing_cols = [c for c in required_cols if c not in student_df.columns]
     if missing_cols:
         st.error(f"❌ 「學生資料」工作表缺少以下欄位：{missing_cols}")
         st.write("現有欄位：", student_df.columns.tolist())
         st.stop()
 
-    active_students = student_df[student_df['狀態'] == 'Y']
+    # --- Step 1: Find which schools+levels have questions in standby ---
+    available_schools = sorted(edited_df['School'].unique().tolist())
 
-    if active_students.empty:
-        st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。請先將測試學生的狀態改為 Y。")
+    if not available_schools:
+        st.warning("⚠️ 目前沒有符合條件的題目，請先確認 standby 表有 Ready/Waiting 的題目。")
         st.stop()
 
-    merged = active_students.merge(
-        edited_df,
-        left_on=['學校', '年級'],
-        right_on=['School', 'Level'],
-        how='inner'
+    # --- Step 2: Admin picks a school ---
+    st.markdown("**第一步：選擇學校**")
+
+    if "mode_b_school" not in st.session_state or st.session_state.mode_b_school not in available_schools:
+        st.session_state.mode_b_school = available_schools[0]
+
+    chosen_school = st.selectbox(
+        "選擇學校",
+        available_schools,
+        index=available_schools.index(st.session_state.mode_b_school),
+        key="mode_b_school_select"
     )
+    st.session_state.mode_b_school = chosen_school
 
-    if merged.empty:
-        st.warning("⚠️ 沒有符合條件的配對。請確認：")
-        st.write("1. `standby` 表有 Status = Ready/Waiting 的題目")
-        st.write("2. `學生資料` 表有 狀態 = Y 的學生")
-        st.write("3. 學校名稱和年級在兩張表中**完全一致**（注意空格/全半形）")
+    # --- Step 3: Find students from 學生資料 that match chosen school + selected_level ---
+    matched_students = student_df[
+        (student_df['學校'] == chosen_school) &
+        (student_df['年級'] == selected_level)
+    ].copy()
 
-        with st.expander("🔍 查看配對資料（協助排查問題）"):
+    if matched_students.empty:
+        st.warning(f"⚠️ 在「學生資料」中找不到 **{chosen_school}** / **{selected_level}** 的學生。")
+        with st.expander("🔍 排查資料"):
             st.write("**standby 的 School 值：**", edited_df['School'].unique().tolist())
-            st.write("**standby 的 Level 值：**", edited_df['Level'].unique().tolist())
-            st.write("**學生資料 的 學校 值：**", active_students['學校'].unique().tolist())
-            st.write("**學生資料 的 年級 值：**", active_students['年級'].unique().tolist())
+            st.write("**學生資料 的 學校 值：**", student_df['學校'].unique().tolist())
+            st.write("**學生資料 的 年級 值：**", student_df['年級'].unique().tolist())
         st.stop()
 
-    st.success(f"✅ 成功配對 {merged['家長 Email'].nunique()} 位學生，共 {len(merged)} 題")
+    # --- Step 4: Show student list with checkboxes ---
+    st.markdown(f"**第二步：勾選要發送的學生** （共 {len(matched_students)} 位）")
 
-    for parent_email, group in merged.groupby('家長 Email'):
-        student_name  = group['學生姓名'].iloc[0]
-        school_name   = group['學校'].iloc[0]
-        grade         = group['年級'].iloc[0]
-        teacher_email = group['老師 Email'].iloc[0] if '老師 Email' in group.columns else "N/A"
+    # Get questions for this school+level
+    school_questions = edited_df[edited_df['School'] == chosen_school].to_dict('records')
 
-        st.divider()
-        col1, col2 = st.columns([1, 2])
+    if not school_questions:
+        st.warning(f"⚠️ standby 表中找不到 {chosen_school} 的題目。")
+        st.stop()
 
-        pdf_buffer = create_pdf(school_name, grade, group.to_dict('records'), student_name=student_name)
-        pdf_bytes  = pdf_buffer.getvalue()
+    # Select All / Deselect All buttons
+    col_all, col_none, _ = st.columns([1, 1, 4])
+    with col_all:
+        if st.button("✅ 全選"):
+            for idx in matched_students.index:
+                st.session_state[f"student_check_{idx}"] = True
+    with col_none:
+        if st.button("❌ 全不選"):
+            for idx in matched_students.index:
+                st.session_state[f"student_check_{idx}"] = False
 
-        with col1:
-            st.write(f"**👤 學生：** {student_name}")
-            st.write(f"**🏫 學校：** {school_name} ({grade})")
-            st.write(f"**📧 家長：** {parent_email}")
-            st.write(f"**👩‍🏫 老師：** {teacher_email}")
-            st.write(f"**📝 題目數：** {len(group)} 題")
+    st.divider()
 
-            st.download_button(
-                label=f"📥 下載 {student_name} PDF",
-                data=pdf_bytes,
-                file_name=f"{student_name}_{grade}_Review_{datetime.date.today()}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                key=f"dl_{parent_email}"
+    # Render each student as a row with checkbox
+    selected_students = []
+    for idx, row in matched_students.iterrows():
+        key = f"student_check_{idx}"
+        if key not in st.session_state:
+            st.session_state[key] = True  # default: all checked
+
+        col_check, col_name, col_email = st.columns([0.5, 2, 3])
+        with col_check:
+            checked = st.checkbox("", value=st.session_state[key], key=key)
+        with col_name:
+            st.write(f"👤 **{row['學生姓名']}**")
+        with col_email:
+            email_val = str(row['家長 Email']).strip()
+            if re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', email_val):
+                st.write(f"📧 {email_val}")
+            else:
+                st.write(f"⚠️ 電郵無效: `{email_val}`")
+
+        if checked:
+            selected_students.append(row)
+
+    st.divider()
+
+    # --- Step 5: Preview + Send ---
+    st.markdown(f"**第三步：預覽及發送** （已選 {len(selected_students)} 位學生）")
+
+    if not selected_students:
+        st.info("請先勾選至少一位學生。")
+        st.stop()
+
+    # Show preview for first selected student
+    preview_student = selected_students[0]
+    preview_name = preview_student['學生姓名']
+
+    with st.expander(f"🔍 預覽工作紙樣本（以 {preview_name} 為例）", expanded=True):
+        preview_pdf = create_pdf(chosen_school, selected_level, school_questions, student_name=preview_name)
+        display_pdf_as_images(preview_pdf.getvalue())
+
+    st.info(f"💡 所有學生收到的題目內容相同，只有封面姓名不同。")
+
+    # Send All button
+    if st.button(f"📧 發送給已選 {len(selected_students)} 位學生的家長", type="primary", use_container_width=True):
+        progress = st.progress(0)
+        results = []
+
+        for i, student_row in enumerate(selected_students):
+            student_name = student_row['學生姓名']
+            parent_email = str(student_row['家長 Email']).strip()
+
+            # Generate personalized PDF (same questions, different name on cover)
+            pdf_buf = create_pdf(chosen_school, selected_level, school_questions, student_name=student_name)
+            pdf_bytes = pdf_buf.getvalue()
+
+            success, msg = send_email_with_pdf(
+                parent_email, student_name, chosen_school, selected_level, pdf_bytes
             )
+            results.append((student_name, parent_email, success, msg))
+            progress.progress((i + 1) / len(selected_students))
 
-            if st.button(f"📧 寄送給 {student_name} 家長", key=f"send_{parent_email}", use_container_width=True):
-                with st.spinner(f"正在寄送給 {parent_email}..."):
-                    success, msg = send_email_with_pdf(
-                        parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
-                    )
-                    if success:
-                        st.success(f"✅ 已成功寄送！")
-                    else:
-                        st.error(f"❌ 發送失敗: {msg}")
-                        st.code(msg)
+        # Show results summary
+        st.divider()
+        success_count = sum(1 for _, _, s, _ in results if s)
+        fail_count = len(results) - success_count
+        st.success(f"✅ 成功發送：{success_count} 位　　❌ 失敗：{fail_count} 位")
 
-        with col2:
-            st.write("🔍 **100% 準確預覽**")
-            display_pdf_as_images(pdf_bytes)
+        for student_name, email, success, msg in results:
+            if success:
+                st.write(f"✅ {student_name} → {email}")
+            else:
+                st.write(f"❌ {student_name} → {email}")
+                st.code(msg)
