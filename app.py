@@ -247,9 +247,9 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
 
         # --- CLEAN & VALIDATE CC ---
         if cc_email:
-            cc_clean = str(cc_email).strip()
-            if cc_clean.lower() not in ["n/a", "nan", "", "none"] and "@" in cc_clean:
-                message.add_cc(cc_clean)
+            cc_clean = str(cc_email).strip().lower()
+            if cc_clean not in ["n/a", "nan", "", "none"] and "@" in cc_clean and cc_clean != recipient.lower():
+            message.add_cc(cc_clean)
 
         # --- ATTACHMENT ---
         encoded_pdf = base64.b64encode(pdf_bytes).decode()
