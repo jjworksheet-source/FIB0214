@@ -6,3 +6,4 @@ python-docx
 reportlab
 pdf2image
 pillow
+sendgrid
