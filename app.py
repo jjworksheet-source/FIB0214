@@ -221,9 +221,15 @@ def create_pdf(school_name, level, questions, student_name=None):
 def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
     try:
         sg_config = st.secrets["sendgrid"]
+        
+        # --- CLEAN & VALIDATE RECIPIENT ---
+        recipient = str(to_email).strip()
+        if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
+            return False, f"無效的家長電郵格式: '{recipient}'"
+
         message = Mail(
             from_email=(sg_config["from_email"], sg_config["from_name"]),
-            to_emails=to_email,
+            to_emails=recipient,
             subject=f"【工作紙】{school_name} ({grade}) - {student_name} 的校本填充練習",
             html_content=f"""
                 <p>親愛的家長您好：</p>
@@ -232,8 +238,15 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
                 <br><p>-- 自動發送系統 --</p>
             """
         )
-        if cc_email and cc_email != "N/A":
-            message.cc = cc_email
+        
+        # --- CLEAN & VALIDATE CC (Teacher Email) ---
+        if cc_email:
+            cc_clean = str(cc_email).strip().lower()
+            # Only add CC if it's a real email and not "n/a" or empty
+            if cc_clean not in ["n/a", "nan", "", "none"] and "@" in cc_clean:
+                message.cc = cc_clean
+        
+        # --- ATTACHMENT ---
         encoded_pdf = base64.b64encode(pdf_bytes).decode()
         attachment = Attachment(
             FileContent(encoded_pdf),
@@ -242,10 +255,19 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             Disposition('attachment')
         )
         message.add_attachment(attachment)
+        
+        # --- SEND ---
         sg = SendGridAPIClient(sg_config["api_key"])
-        sg.send(message)
-        return True, "發送成功"
+        response = sg.send(message)
+        
+        # If status code is 2xx, it's a success
+        if 200 <= response.status_code < 300:
+            return True, "發送成功"
+        else:
+            return False, f"SendGrid Error: {response.status_code}"
+            
     except Exception as e:
+        # This will catch the "400 Bad Request" and show the detailed error from SendGrid
         return False, str(e)
 
 # --- Helper: Render PDF pages as images ---
