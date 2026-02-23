@@ -10,6 +10,7 @@ import base64
 from pdf2image import convert_from_bytes
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+from python_http_client.exceptions import HTTPError
 
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
@@ -266,9 +267,10 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         else:
             return False, f"SendGrid Error: {response.status_code}"
             
-    except Exception as e:
-        # This will catch the "400 Bad Request" and show the detailed error from SendGrid
-        return False, str(e)
+    except HTTPError as e:
+    return False, e.body.decode("utf-8")
+except Exception as e:
+    return False, str(e)
 
 # --- Helper: Render PDF pages as images ---
 def display_pdf_as_images(pdf_bytes):
