@@ -9,7 +9,7 @@ import re
 import base64
 from pdf2image import convert_from_bytes
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
+from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, Email
 from python_http_client.exceptions import HTTPError
 
 # --- 1. SETUP & CONNECTION ---
@@ -195,7 +195,6 @@ def create_pdf(school_name, level, questions, student_name=None):
         firstLineIndent=-25
     )
 
-    # Title: include student name if provided
     if student_name:
         title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>"
     else:
@@ -218,18 +217,24 @@ def create_pdf(school_name, level, questions, student_name=None):
     bio.seek(0)
     return bio
 
-# --- SendGrid Email Function ---
+# --- SendGrid Email Function (FIXED) ---
 def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
     try:
         sg_config = st.secrets["sendgrid"]
-        
+
         # --- CLEAN & VALIDATE RECIPIENT ---
         recipient = str(to_email).strip()
         if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
             return False, f"無效的家長電郵格式: '{recipient}'"
 
+        # --- BUILD MESSAGE (use Email object, not tuple) ---
+        from_email_obj = Email(sg_config["from_email"], sg_config.get("from_name", ""))
+
+        # Clean student name for filename (remove non-ASCII)
+        safe_name = re.sub(r'[^\w\-]', '_', str(student_name).strip())
+
         message = Mail(
-            from_email=(sg_config["from_email"], sg_config["from_name"]),
+            from_email=from_email_obj,
             to_emails=recipient,
             subject=f"【工作紙】{school_name} ({grade}) - {student_name} 的校本填充練習",
             html_content=f"""
@@ -239,38 +244,40 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
                 <br><p>-- 自動發送系統 --</p>
             """
         )
-        
-        # --- CLEAN & VALIDATE CC (Teacher Email) ---
+
+        # --- CLEAN & VALIDATE CC ---
         if cc_email:
-            cc_clean = str(cc_email).strip().lower()
-            # Only add CC if it's a real email and not "n/a" or empty
-            if cc_clean not in ["n/a", "nan", "", "none"] and "@" in cc_clean:
-                message.cc = cc_clean
-        
+            cc_clean = str(cc_email).strip()
+            if cc_clean.lower() not in ["n/a", "nan", "", "none"] and "@" in cc_clean:
+                message.add_cc(cc_clean)
+
         # --- ATTACHMENT ---
         encoded_pdf = base64.b64encode(pdf_bytes).decode()
         attachment = Attachment(
             FileContent(encoded_pdf),
-            FileName(f"{student_name}_Worksheet.pdf"),
+            FileName(f"{safe_name}_Worksheet.pdf"),
             FileType('application/pdf'),
             Disposition('attachment')
         )
         message.add_attachment(attachment)
-        
+
         # --- SEND ---
         sg = SendGridAPIClient(sg_config["api_key"])
         response = sg.send(message)
-        
-        # If status code is 2xx, it's a success
+
         if 200 <= response.status_code < 300:
             return True, "發送成功"
         else:
             return False, f"SendGrid Error: {response.status_code}"
-            
+
     except HTTPError as e:
-    return False, e.body.decode("utf-8")
-except Exception as e:
-    return False, str(e)
+        # Shows the REAL detailed error from SendGrid
+        try:
+            return False, e.body.decode("utf-8")
+        except Exception:
+            return False, str(e)
+    except Exception as e:
+        return False, str(e)
 
 # --- Helper: Render PDF pages as images ---
 def display_pdf_as_images(pdf_bytes):
@@ -287,7 +294,7 @@ st.divider()
 st.subheader("🚀 Finalize Documents")
 
 # ============================================================
-# MODE A: 按學校預覽下載（原有功能，完全保留）
+# MODE A: 按學校預覽下載
 # ============================================================
 if send_mode == "📄 按學校預覽下載":
     schools = edited_df['School'].unique() if not edited_df.empty else []
@@ -324,7 +331,7 @@ if send_mode == "📄 按學校預覽下載":
             display_pdf_as_images(pdf_bytes)
 
 # ============================================================
-# MODE B: 按學生寄送（新功能：配對學生資料）
+# MODE B: 按學生寄送
 # ============================================================
 else:
     st.subheader("👨‍👩‍👧 學生配對結果")
@@ -333,7 +340,6 @@ else:
         st.error("❌ 無法讀取「學生資料」工作表，請確認工作表名稱正確。")
         st.stop()
 
-    # Check required columns exist in student_df
     required_cols = ['學校', '年級', '狀態', '學生姓名', '家長 Email']
     missing_cols = [c for c in required_cols if c not in student_df.columns]
     if missing_cols:
@@ -341,14 +347,12 @@ else:
         st.write("現有欄位：", student_df.columns.tolist())
         st.stop()
 
-    # Filter: only active students (狀態 = Y)
     active_students = student_df[student_df['狀態'] == 'Y']
 
     if active_students.empty:
         st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。請先將測試學生的狀態改為 Y。")
         st.stop()
 
-    # Merge: standby (School + Level) ↔ 學生資料 (學校 + 年級)
     merged = active_students.merge(
         edited_df,
         left_on=['學校', '年級'],
@@ -362,7 +366,6 @@ else:
         st.write("2. `學生資料` 表有 狀態 = Y 的學生")
         st.write("3. 學校名稱和年級在兩張表中**完全一致**（注意空格/全半形）")
 
-        # Show debug info to help admin fix mismatch
         with st.expander("🔍 查看配對資料（協助排查問題）"):
             st.write("**standby 的 School 值：**", edited_df['School'].unique().tolist())
             st.write("**standby 的 Level 值：**", edited_df['Level'].unique().tolist())
@@ -370,10 +373,8 @@ else:
             st.write("**學生資料 的 年級 值：**", active_students['年級'].unique().tolist())
         st.stop()
 
-    # Show match summary
     st.success(f"✅ 成功配對 {merged['家長 Email'].nunique()} 位學生，共 {len(merged)} 題")
 
-    # Group by Parent Email → one PDF per student
     for parent_email, group in merged.groupby('家長 Email'):
         student_name  = group['學生姓名'].iloc[0]
         school_name   = group['學校'].iloc[0]
@@ -383,7 +384,6 @@ else:
         st.divider()
         col1, col2 = st.columns([1, 2])
 
-        # Generate PDF with student name in title
         pdf_buffer = create_pdf(school_name, grade, group.to_dict('records'), student_name=student_name)
         pdf_bytes  = pdf_buffer.getvalue()
 
@@ -409,10 +409,10 @@ else:
                         parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
                     )
                     if success:
-                      st.success(f"✅ 已成功寄送！")
+                        st.success(f"✅ 已成功寄送！")
                     else:
-                      st.error(f"❌ 發送失敗: {msg}")
-                      st.code(msg) 
+                        st.error(f"❌ 發送失敗: {msg}")
+                        st.code(msg)
 
         with col2:
             st.write("🔍 **100% 準確預覽**")
