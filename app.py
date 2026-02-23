@@ -367,6 +367,8 @@ with col_main:
         source    = str(word_rows.iloc[0]["來源"]).strip()
         status    = str(word_rows.iloc[0]["狀態"]).strip()
         ts        = str(word_rows.iloc[0]["Timestamp"]).strip()
+        # Use DataFrame index as unique key suffix to avoid duplicate key errors
+        row_idx   = word_rows.index[0]
 
         if source == "DB":
             badge = '<span class="badge-db">📗 資料庫</span>'
@@ -387,7 +389,7 @@ with col_main:
             sentence = str(word_rows.iloc[0]["句子"]).strip()
             final = st.text_area(
                 f"句子（可修改）", value=sentence,
-                key=f"db_{ts}", height=75, label_visibility="collapsed"
+                key=f"db_{row_idx}", height=75, label_visibility="collapsed"
             )
             st.session_state["chosen"][ts] = final
 
@@ -396,12 +398,12 @@ with col_main:
             options = word_rows["句子"].astype(str).tolist()
             chosen_opt = st.radio(
                 "選擇 AI 句子", options,
-                key=f"rad_{ts}", horizontal=False
+                key=f"rad_{row_idx}", horizontal=False
             )
             override = st.text_input(
                 "✏️ 手動輸入（留空則使用上方選擇）",
                 value="", placeholder=chosen_opt,
-                key=f"ovr_{ts}"
+                key=f"ovr_{row_idx}"
             )
             final = override.strip() if override.strip() else chosen_opt
             st.session_state["chosen"][ts] = final
