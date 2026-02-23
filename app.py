@@ -84,27 +84,6 @@ except Exception as e:
     st.stop()
 
 # --- 2. LOAD DATA ---
-def map_headers(df):
-    """Map Chinese headers to English for internal logic."""
-    col_map = {
-        '學校': 'School',
-        '年級': 'Level',
-        '詞語': 'Word',
-        '句子': 'Content',
-        '來源': 'Source',
-        '狀態': 'Status',
-        'Timestamp': 'Timestamp'
-    }
-    # Rename only if the Chinese column exists
-    df.rename(columns={k: v for k, v in col_map.items() if k in df.columns}, inplace=True)
-    
-    # Ensure all required columns exist to avoid KeyError
-    required = ['School', 'Level', 'Word', 'Content', 'Source', 'Status']
-    for col in required:
-        if col not in df.columns:
-            df[col] = ""
-    return df
-
 @st.cache_data(ttl=30)
 def load_standby_data():
     try:
@@ -112,7 +91,7 @@ def load_standby_data():
         ws = sh.worksheet("standby")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        return map_headers(df)
+        return df
     except Exception as e:
         st.error(f"Error reading standby sheet: {e}")
         return pd.DataFrame()
@@ -124,7 +103,18 @@ def load_review_data():
         ws = sh.worksheet("Review")
         data = ws.get_all_records()
         df = pd.DataFrame(data)
-        return map_headers(df)
+        # Rename columns to English for internal use
+        col_map = {
+            'Timestamp': 'Timestamp',
+            '學校': 'School',
+            '年級': 'Level',
+            '詞語': 'Word',
+            '句子': 'Content',
+            '來源': 'Source',
+            '狀態': 'Status'
+        }
+        df.rename(columns=col_map, inplace=True)
+        return df
     except Exception as e:
         st.error(f"Error reading Review sheet: {e}")
         return pd.DataFrame()
@@ -143,19 +133,18 @@ def transfer_to_standby(rows_to_transfer):
         standby_ws = get_standby_worksheet()
         existing = standby_ws.get_all_records()
         existing_df = pd.DataFrame(existing)
-        existing_df = map_headers(existing_df)
 
         rows_added = 0
         for _, row in rows_to_transfer.iterrows():
-            # Check for duplicate
+            # Check for duplicate (same School + Level + Word)
             if not existing_df.empty:
                 dup = existing_df[
-                    (existing_df['School'] == row['School']) &
-                    (existing_df['Level'] == row['Level']) &
-                    (existing_df['Word'] == row['Word'])
+                    (existing_df.get('School', pd.Series(dtype=str)) == row['School']) &
+                    (existing_df.get('Level', pd.Series(dtype=str)) == row['Level']) &
+                    (existing_df.get('Word', pd.Series(dtype=str)) == row['Word'])
                 ]
                 if not dup.empty:
-                    continue
+                    continue  # Skip duplicate
 
             new_row = [
                 row.get('School', ''),
@@ -181,21 +170,21 @@ def update_review_status(word, school, level, new_status):
         all_data = ws.get_all_values()
         headers = all_data[0]
 
-        # Find column indices (1-based for gspread)
+        # Find column indices
         try:
-            word_idx = headers.index('詞語') if '詞語' in headers else headers.index('Word')
-            school_idx = headers.index('學校') if '學校' in headers else headers.index('School')
-            level_idx = headers.index('年級') if '年級' in headers else headers.index('Level')
-            status_idx = headers.index('狀態') if '狀態' in headers else headers.index('Status')
+            word_col = headers.index('詞語') + 1
+            school_col = headers.index('學校') + 1
+            level_col = headers.index('年級') + 1
+            status_col = headers.index('狀態') + 1
         except ValueError:
             return False
 
         for i, row in enumerate(all_data[1:], start=2):
-            if (len(row) > max(word_idx, school_idx, level_idx) and
-                row[word_idx] == word and
-                row[school_idx] == school and
-                row[level_idx] == level):
-                ws.update_cell(i, status_idx + 1, new_status)
+            if (len(row) >= max(word_col, school_col, level_col) and
+                row[word_col-1] == word and
+                row[school_col-1] == school and
+                row[level_col-1] == level):
+                ws.update_cell(i, status_col, new_status)
                 return True
         return False
     except Exception as e:
@@ -206,36 +195,78 @@ def update_review_status(word, school, level, new_status):
 def make_blank_sentence(content, word):
     """Replace the target word in the sentence with a blank line."""
     blank = "____________"
-    content = str(content)
-    word = str(word)
     if word and word in content:
         return content.replace(word, blank, 1)
+    # If word not found, append blank at end (before 。if present)
     if content.endswith('。'):
         return content[:-1] + blank + '。'
     return content + blank
 
 def create_pdf(school_name, level, questions):
+    """
+    questions: list of dicts with keys: Word, Content
+    Each question gets a unique sentence with the word replaced by blank.
+    """
     bio = io.BytesIO()
-    doc = SimpleDocTemplate(bio, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+    doc = SimpleDocTemplate(
+        bio,
+        pagesize=A4,
+        rightMargin=2*cm,
+        leftMargin=2*cm,
+        topMargin=2*cm,
+        bottomMargin=2*cm
+    )
     story = []
+
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    title_style = ParagraphStyle('Title', fontName=font_name, fontSize=18, alignment=TA_CENTER, spaceAfter=6)
-    subtitle_style = ParagraphStyle('Subtitle', fontName=font_name, fontSize=12, alignment=TA_CENTER, spaceAfter=4)
-    question_style = ParagraphStyle('Question', fontName=font_name, fontSize=13, leading=22, leftIndent=20, firstLineIndent=-20, spaceAfter=8)
+    title_style = ParagraphStyle(
+        'Title',
+        fontName=font_name,
+        fontSize=18,
+        alignment=TA_CENTER,
+        spaceAfter=6,
+        textColor=HexColor('#1a1a2e')
+    )
+    subtitle_style = ParagraphStyle(
+        'Subtitle',
+        fontName=font_name,
+        fontSize=12,
+        alignment=TA_CENTER,
+        spaceAfter=4,
+        textColor=HexColor('#555555')
+    )
+    question_style = ParagraphStyle(
+        'Question',
+        fontName=font_name,
+        fontSize=13,
+        leading=22,
+        leftIndent=20,
+        firstLineIndent=-20,
+        spaceAfter=8,
+        textColor=HexColor('#1a1a2e')
+    )
 
+    # Title
     story.append(Paragraph(f"<b>{school_name} ({level}) - 校本填充工作紙</b>", title_style))
     story.append(Paragraph(f"日期: {datetime.date.today()}", subtitle_style))
     story.append(Spacer(1, 0.1*inch))
     story.append(HRFlowable(width="100%", thickness=1, color=HexColor('#cccccc')))
     story.append(Spacer(1, 0.2*inch))
 
+    # Questions — each row is a DIFFERENT word/sentence
     for i, row in enumerate(questions):
         word = str(row.get('Word', ''))
         content = str(row.get('Content', ''))
+
+        # ✅ KEY FIX: replace the word with blank to make fill-in-the-blank
         blank_sentence = make_blank_sentence(content, word)
+
+        # Handle special markup
         blank_sentence = re.sub(r'【】(.+?)【】', r'<u>\1</u>', blank_sentence)
-        story.append(Paragraph(f"{i+1}. {blank_sentence}", question_style))
+
+        question_text = f"{i+1}. {blank_sentence}"
+        story.append(Paragraph(question_text, question_style))
 
     doc.build(story)
     bio.seek(0)
@@ -244,81 +275,176 @@ def create_pdf(school_name, level, questions):
 # ============================================================
 # MAIN UI
 # ============================================================
+
 tab1, tab2 = st.tabs(["📋 Step 1: 審批 & 移交", "📄 Step 2: 生成工作紙"])
 
+# ============================================================
+# TAB 1: REVIEW & APPROVE
+# ============================================================
 with tab1:
     st.subheader("📋 審批 AI 句子 & 移交至 Standby")
+
     review_df = load_review_data()
 
     if review_df.empty:
-        st.info("Review 表格為空。")
+        st.info("Review 表格為空或無法讀取。")
     else:
-        levels = sorted(review_df['Level'].dropna().unique().tolist())
-        selected_level = st.selectbox("選擇年級", levels, key="review_level")
+        # Show available levels
+        available_levels = sorted(review_df['Level'].dropna().unique().tolist())
+        selected_level = st.selectbox("選擇年級", available_levels, key="review_level")
+
         level_df = review_df[review_df['Level'] == selected_level].copy()
-        
+
+        # Split by status
         pending_df = level_df[level_df['Status'] == 'Pending'].copy()
         ready_df_review = level_df[level_df['Status'] == 'Ready'].copy()
 
+        col1, col2, col3 = st.columns(3)
+        col1.metric("總詞語數", len(level_df))
+        col2.metric("🟡 待審批 (Pending)", len(pending_df))
+        col3.metric("🟢 已就緒 (Ready)", len(ready_df_review))
+
+        st.divider()
+
+        # --- Pending AI sentences ---
         if not pending_df.empty:
             st.markdown("### 🟡 待審批 AI 句子")
+            st.caption("可直接編輯句子，然後點擊「✅ 批准並移交」")
+
             edited_pending = st.data_editor(
                 pending_df[['School', 'Level', 'Word', 'Content', 'Source', 'Status']].reset_index(drop=True),
-                column_config={"Content": st.column_config.TextColumn("句子 (可編輯)", width="large")},
-                hide_index=True, key="pending_editor"
+                column_config={
+                    "School": st.column_config.TextColumn("學校", disabled=True),
+                    "Level": st.column_config.TextColumn("年級", disabled=True),
+                    "Word": st.column_config.TextColumn("詞語", disabled=True),
+                    "Content": st.column_config.TextColumn("句子 (可編輯)", width="large"),
+                    "Source": st.column_config.TextColumn("來源", disabled=True),
+                    "Status": st.column_config.TextColumn("狀態", disabled=True),
+                },
+                hide_index=True,
+                key="pending_editor"
             )
+
             if st.button("✅ 批准並移交至 Standby", type="primary"):
                 transferred = transfer_to_standby(edited_pending)
+                # Update Review status to Ready
                 for _, row in edited_pending.iterrows():
                     update_review_status(row['Word'], row['School'], row['Level'], 'Ready')
                 st.cache_data.clear()
-                st.success(f"✅ 成功移交 {transferred} 條句子！")
+                st.success(f"✅ 成功移交 {transferred} 條句子至 Standby！")
                 st.rerun()
         else:
             st.success("✅ 沒有待審批的 AI 句子！")
 
+        st.divider()
+
+        # --- Ready sentences (from DB, auto-approved) ---
         if not ready_df_review.empty:
-            st.divider()
-            st.markdown("### 🟢 已就緒句子 (可直接移交)")
+            st.markdown("### 🟢 已就緒句子 (DB 來源，可直接移交)")
+            st.dataframe(
+                ready_df_review[['School', 'Level', 'Word', 'Content', 'Source']].reset_index(drop=True),
+                hide_index=True,
+                use_container_width=True
+            )
+
             if st.button("📤 將所有 Ready 句子移交至 Standby"):
                 transferred = transfer_to_standby(ready_df_review)
                 st.cache_data.clear()
                 st.success(f"✅ 成功移交 {transferred} 條句子！")
                 st.rerun()
 
+# ============================================================
+# TAB 2: GENERATE PDF
+# ============================================================
 with tab2:
     st.subheader("📄 生成填充工作紙")
+
     standby_df = load_standby_data()
 
     if standby_df.empty:
         st.warning("Standby 表格為空。請先在 Step 1 移交句子。")
-    else:
-        ready_df = standby_df[standby_df['Status'].isin(['Ready', 'Waiting'])].copy()
-        if ready_df.empty:
-            st.info("沒有 Ready 的句子。")
-        else:
-            levels_pdf = sorted(ready_df['Level'].dropna().unique().tolist())
-            sel_level_pdf = st.selectbox("選擇年級", levels_pdf, key="pdf_level")
-            level_ready = ready_df[ready_df['Level'] == sel_level_pdf].copy()
-            
-            schools = sorted(level_ready['School'].dropna().unique().tolist())
-            sel_schools = st.multiselect("選擇學校", schools, default=schools)
-            filtered_df = level_ready[level_ready['School'].isin(sel_schools)]
+        st.stop()
 
-            if not filtered_df.empty:
-                preview_df = filtered_df[['School', 'Level', 'Word', 'Content']].copy()
-                preview_df['填充句子預覽'] = preview_df.apply(lambda r: make_blank_sentence(r['Content'], r['Word']), axis=1)
-                
-                edited_df = st.data_editor(
-                    preview_df.reset_index(drop=True),
-                    column_config={"填充句子預覽": st.column_config.TextColumn("填充句子 (可修改)", width="large")},
-                    hide_index=True, key="pdf_editor"
-                )
+    # Ensure correct column names
+    # Expected: School, Level, Word, Content, Status, Source, Timestamp
+    required_cols = ['School', 'Level', 'Word', 'Content', 'Status']
+    missing = [c for c in required_cols if c not in standby_df.columns]
+    if missing:
+        st.error(f"Standby 表格缺少欄位: {missing}")
+        st.write("現有欄位:", standby_df.columns.tolist())
+        st.stop()
 
-                if st.button("🚀 生成工作紙 PDF", type="primary"):
-                    for school in edited_df['School'].unique():
-                        school_data = edited_df[edited_df['School'] == school].copy()
-                        school_data['Content'] = school_data['填充句子預覽']
-                        school_data['Word'] = "" # Prevent double blanking
-                        pdf = create_pdf(school, sel_level_pdf, school_data.to_dict('records'))
-                        st.download_button(label=f"📥 下載 {school} 工作紙", data=pdf, file_name=f"{school}_worksheet.pdf", mime="application/pdf")
+    # Filter Ready
+    ready_df = standby_df[standby_df['Status'].isin(['Ready', 'Waiting'])].copy()
+
+    if ready_df.empty:
+        st.info("Standby 中沒有 Ready/Waiting 的句子。")
+        st.stop()
+
+    # Select Level
+    levels = sorted(ready_df['Level'].dropna().unique().tolist())
+    selected_level_pdf = st.selectbox("選擇年級", levels, key="pdf_level")
+
+    level_ready = ready_df[ready_df['Level'] == selected_level_pdf].copy()
+
+    # Select Schools
+    schools = sorted(level_ready['School'].dropna().unique().tolist())
+    selected_schools = st.multiselect("選擇學校", schools, default=schools)
+
+    filtered_df = level_ready[level_ready['School'].isin(selected_schools)]
+
+    if filtered_df.empty:
+        st.info("沒有符合條件的句子。")
+        st.stop()
+
+    st.markdown("### 📝 預覽句子（可編輯）")
+    st.caption("句子中的詞語將自動替換為填充空格 ____________")
+
+    # Show preview with blank substitution
+    preview_df = filtered_df[['School', 'Level', 'Word', 'Content']].copy()
+    preview_df['填充句子預覽'] = preview_df.apply(
+        lambda r: make_blank_sentence(str(r['Content']), str(r['Word'])), axis=1
+    )
+
+    edited_df = st.data_editor(
+        preview_df.reset_index(drop=True),
+        column_config={
+            "School": st.column_config.TextColumn("學校", disabled=True),
+            "Level": st.column_config.TextColumn("年級", disabled=True),
+            "Word": st.column_config.TextColumn("詞語", disabled=True),
+            "Content": st.column_config.TextColumn("原句", disabled=True),
+            "填充句子預覽": st.column_config.TextColumn("填充句子（可修改）", width="large"),
+        },
+        hide_index=True,
+        key="pdf_editor"
+    )
+
+    st.divider()
+
+    if st.button("🚀 生成工作紙 PDF", type="primary"):
+        pdf_schools = edited_df['School'].unique()
+        generated = 0
+
+        for school in pdf_schools:
+            school_data = edited_df[edited_df['School'] == school].copy()
+            if school_data.empty:
+                continue
+
+            # Use the edited blank sentence as Content for PDF
+            school_data['Content'] = school_data['填充句子預覽']
+            # Pass Word as empty so make_blank_sentence won't double-replace
+            school_data['Word'] = ''
+
+            pdf_file = create_pdf(school, selected_level_pdf, school_data.to_dict('records'))
+            generated += 1
+
+            st.download_button(
+                label=f"📥 下載 {school} ({selected_level_pdf}) 工作紙",
+                data=pdf_file,
+                file_name=f"{school}_{selected_level_pdf}_worksheet_{datetime.date.today()}.pdf",
+                mime="application/pdf",
+                key=f"dl_{school}_{selected_level_pdf}"
+            )
+
+        if generated:
+            st.success(f"✅ 已生成 {generated} 份工作紙！")
