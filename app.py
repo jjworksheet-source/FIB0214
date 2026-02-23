@@ -406,7 +406,7 @@ else:
                     success, msg = send_email_with_pdf(
                         parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
                     )
-                    python    st.code(msg)  # ← ADD THIS ONE LINE
+                    python    st.code(msg) 
 
         with col2:
             st.write("🔍 **100% 準確預覽**")
