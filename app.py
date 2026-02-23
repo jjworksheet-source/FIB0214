@@ -408,7 +408,7 @@ else:
                     )
                     if success:
                       st.success(f"✅ 已成功寄送！")
-                  else:
+                    else:
                       st.error(f"❌ 發送失敗: {msg}")
                       st.code(msg) 
 
