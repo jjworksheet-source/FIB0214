@@ -366,6 +366,12 @@ else:
         index=available_schools.index(st.session_state.mode_b_school),
         key="mode_b_school_select"
     )
+    # Reset checkboxes when school changes
+    if st.session_state.get("_last_mode_b_school") != chosen_school:
+        for k in list(st.session_state.keys()):
+            if k.startswith("student_check_"):
+                del st.session_state[k]
+        st.session_state["_last_mode_b_school"] = chosen_school
     st.session_state.mode_b_school = chosen_school
 
     # --- Step 3: Find students from 學生資料 that match chosen school + selected_level ---
@@ -397,18 +403,18 @@ else:
     with col_all:
         if st.button("✅ 全選"):
             for idx in matched_students.index:
-                st.session_state[f"student_check_{idx}"] = True
+                st.session_state[f"student_check_{chosen_school}_{idx}"] = True
     with col_none:
         if st.button("❌ 全不選"):
             for idx in matched_students.index:
-                st.session_state[f"student_check_{idx}"] = False
+                st.session_state[f"student_check_{chosen_school}_{idx}"] = False
 
     st.divider()
 
     # Render each student as a row with checkbox
     selected_students = []
     for idx, row in matched_students.iterrows():
-        key = f"student_check_{idx}"
+        key = f"student_check_{chosen_school}_{idx}"
         if key not in st.session_state:
             st.session_state[key] = True  # default: all checked
 
