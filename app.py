@@ -8,6 +8,8 @@ import os
 import re
 import base64
 from pdf2image import convert_from_bytes
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition
 
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
@@ -215,6 +217,37 @@ def create_pdf(school_name, level, questions, student_name=None):
     bio.seek(0)
     return bio
 
+# --- SendGrid Email Function ---
+def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
+    try:
+        sg_config = st.secrets["sendgrid"]
+        message = Mail(
+            from_email=(sg_config["from_email"], sg_config["from_name"]),
+            to_emails=to_email,
+            subject=f"【工作紙】{school_name} ({grade}) - {student_name} 的校本填充練習",
+            html_content=f"""
+                <p>親愛的家長您好：</p>
+                <p>附件為 <strong>{student_name}</strong> 同學在 <strong>{school_name} ({grade})</strong> 的校本填充工作紙。</p>
+                <p>請下載並列印供同學練習。祝 學習愉快！</p>
+                <br><p>-- 自動發送系統 --</p>
+            """
+        )
+        if cc_email and cc_email != "N/A":
+            message.cc = cc_email
+        encoded_pdf = base64.b64encode(pdf_bytes).decode()
+        attachment = Attachment(
+            FileContent(encoded_pdf),
+            FileName(f"{student_name}_Worksheet.pdf"),
+            FileType('application/pdf'),
+            Disposition('attachment')
+        )
+        message.add_attachment(attachment)
+        sg = SendGridAPIClient(sg_config["api_key"])
+        sg.send(message)
+        return True, "發送成功"
+    except Exception as e:
+        return False, str(e)
+
 # --- Helper: Render PDF pages as images ---
 def display_pdf_as_images(pdf_bytes):
     try:
@@ -346,7 +379,15 @@ else:
                 key=f"dl_{parent_email}"
             )
 
-            st.info("💡 確認無誤後，可手動寄送此 PDF 給家長。")
+            if st.button(f"📧 寄送給 {student_name} 家長", key=f"send_{parent_email}", use_container_width=True):
+                with st.spinner(f"正在寄送給 {parent_email}..."):
+                    success, msg = send_email_with_pdf(
+                        parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
+                    )
+                    if success:
+                        st.success(f"✅ 已成功寄送！")
+                    else:
+                        st.error(f"❌ 發送失敗: {msg}")
 
         with col2:
             st.write("🔍 **100% 準確預覽**")
