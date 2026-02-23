@@ -1,3 +1,7 @@
+# main.py — Full Production Code
+# Architecture: Google Form → GAS → Review Sheet → Streamlit (One-Stop) → PDF/Email
+# Review Sheet Status Flow: Ready/Pending → Loaded → Sent
+
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -9,36 +13,33 @@ import re
 import base64
 from pdf2image import convert_from_bytes
 from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, Email
+from sendgrid.helpers.mail import (
+    Mail, Attachment, FileContent, FileName, FileType, Disposition, Email
+)
 from python_http_client.exceptions import HTTPError
 
 # ============================================================
-# 1. PAGE CONFIG & CUSTOM CSS
+# 1. PAGE CONFIG
 # ============================================================
 st.set_page_config(page_title="Worksheet Admin", page_icon="🎯", layout="wide")
 
 st.markdown("""
 <style>
 [data-testid="stSidebar"] { background-color: #f0f4f8; }
-.stTabs [data-baseweb="tab"] {
-    font-size: 16px; font-weight: 600; padding: 10px 20px;
-}
+.stTabs [data-baseweb="tab"] { font-size:16px; font-weight:600; padding:10px 20px; }
 .word-card {
-    background: #ffffff;
-    border: 1px solid #dee2e6;
-    border-radius: 12px;
-    padding: 18px 22px;
-    margin-bottom: 14px;
+    background:#fff; border:1px solid #dee2e6; border-radius:12px;
+    padding:16px 20px; margin-bottom:12px;
     box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
-.badge-db   { background:#d4edda; color:#155724; padding:3px 10px; border-radius:20px; font-size:13px; font-weight:600; }
-.badge-ai   { background:#fff3cd; color:#856404; padding:3px 10px; border-radius:20px; font-size:13px; font-weight:600; }
-.badge-done { background:#cce5ff; color:#004085; padding:3px 10px; border-radius:20px; font-size:13px; font-weight:600; }
+.badge-db      { background:#d4edda; color:#155724; padding:3px 10px; border-radius:20px; font-size:13px; font-weight:600; }
+.badge-ai      { background:#fff3cd; color:#856404; padding:3px 10px; border-radius:20px; font-size:13px; font-weight:600; }
+.badge-pending { background:#f8d7da; color:#721c24; padding:3px 10px; border-radius:20px; font-size:13px; font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# 2. FONT & PDF SETUP
+# 2. FONT SETUP
 # ============================================================
 try:
     from reportlab.lib.pagesizes import letter
@@ -50,12 +51,13 @@ try:
     from reportlab.lib.enums import TA_CENTER
 
     CHINESE_FONT = None
-    for path in ["Kai.ttf", "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    for path in ["Kai.ttf",
+                 "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
                  "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"]:
         if os.path.exists(path):
             try:
-                pdfmetrics.registerFont(TTFont('ChineseFont', path))
-                CHINESE_FONT = 'ChineseFont'
+                pdfmetrics.registerFont(TTFont("ChineseFont", path))
+                CHINESE_FONT = "ChineseFont"
                 break
             except Exception:
                 continue
@@ -67,16 +69,16 @@ except ImportError:
 # 3. GOOGLE SHEETS CONNECTION
 # ============================================================
 @st.cache_resource
-def get_client():
-    key_dict = st.secrets["gcp_service_account"]
+def get_gspread_client():
     creds = Credentials.from_service_account_info(
-        key_dict,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        st.secrets["gcp_service_account"],
+        scopes=["https://spreadsheets.google.com/feeds",
+                "https://www.googleapis.com/auth/drive"]
     )
     return gspread.authorize(creds)
 
 try:
-    gc = get_client()
+    gc       = get_gspread_client()
     SHEET_ID = st.secrets["app_config"]["spreadsheet_id"]
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
@@ -85,88 +87,87 @@ except Exception as e:
 # ============================================================
 # 4. DATA LOADERS
 # ============================================================
-@st.cache_data(ttl=60)
-def load_review():
-    sh = gc.open_by_key(SHEET_ID)
-    df = pd.DataFrame(sh.worksheet("Review").get_all_records())
-    if df.empty:
+@st.cache_data(ttl=30)
+def load_review() -> pd.DataFrame:
+    """Load rows from Review sheet that are Ready or Pending (not Loaded/Sent)."""
+    try:
+        sh  = gc.open_by_key(SHEET_ID)
+        ws  = sh.worksheet("Review")
+        df  = pd.DataFrame(ws.get_all_records())
+        if df.empty:
+            return df
+        df.columns = [c.strip() for c in df.columns]
+        for col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.strip()
         return df
-    df.columns = [c.strip() for c in df.columns]
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].astype(str).str.strip()
-    return df
+    except Exception as e:
+        st.error(f"Error loading Review sheet: {e}")
+        return pd.DataFrame()
 
-@st.cache_data(ttl=60)
-def load_standby():
-    sh = gc.open_by_key(SHEET_ID)
-    df = pd.DataFrame(sh.worksheet("standby").get_all_records())
-    if df.empty:
+@st.cache_data(ttl=30)
+def load_students() -> pd.DataFrame:
+    try:
+        sh  = gc.open_by_key(SHEET_ID)
+        ws  = sh.worksheet("學生資料")
+        df  = pd.DataFrame(ws.get_all_records())
+        if df.empty:
+            return df
+        df.columns = [c.strip() for c in df.columns]
+        for col in df.columns:
+            if df[col].dtype == object:
+                df[col] = df[col].astype(str).str.strip()
         return df
-    df.columns = [c.strip() for c in df.columns]
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].astype(str).str.strip()
-    return df
+    except Exception as e:
+        st.error(f"Error loading 學生資料: {e}")
+        return pd.DataFrame()
 
-@st.cache_data(ttl=60)
-def load_students():
-    sh = gc.open_by_key(SHEET_ID)
-    df = pd.DataFrame(sh.worksheet("學生資料").get_all_records())
-    if df.empty:
-        return df
-    df.columns = [c.strip() for c in df.columns]
-    for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].astype(str).str.strip()
-    return df
-
-def clear_all_cache():
+def clear_cache():
     load_review.clear()
-    load_standby.clear()
     load_students.clear()
 
 # ============================================================
-# 5. WRITE-BACK HELPERS
+# 5. GOOGLE SHEETS WRITE-BACK
 # ============================================================
-def move_word_to_standby(review_row: dict, final_sentence: str) -> tuple[bool, str]:
-    """Write one approved word to standby and mark Review row as Transferred."""
+def mark_rows_in_review(timestamps: list[str], new_status: str,
+                         sentence_updates: dict = None):
+    """
+    Update 狀態 column (col G = 7) for rows matching given Timestamps.
+    Optionally update 句子 column (col E = 5) via sentence_updates = {timestamp: sentence}.
+    """
     try:
-        sh = gc.open_by_key(SHEET_ID)
-        standby_ws = sh.worksheet("standby")
-        review_ws  = sh.worksheet("Review")
+        sh  = gc.open_by_key(SHEET_ID)
+        ws  = sh.worksheet("Review")
+        all_vals = ws.get_all_values()   # list of lists, row 0 = header
 
-        now_str    = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        unique_id  = f"ID_{datetime.datetime.now().strftime('%m%d%H%M%S%f')[-12:]}"
+        # Build col index map from header
+        header = [h.strip() for h in all_vals[0]]
+        ts_col     = header.index("Timestamp") + 1   # 1-based
+        status_col = header.index("狀態")      + 1
+        sentence_col = header.index("句子")    + 1
 
-        # Append to standby: ID, School, Grade, Word, Type, Content, Answer, Status, Date
-        standby_ws.append_row([
-            unique_id,
-            review_row.get("學校", ""),
-            review_row.get("年級", ""),
-            review_row.get("詞語", ""),
-            "填空題",
-            final_sentence,
-            review_row.get("詞語", ""),   # Answer = the word itself
-            "Ready",
-            now_str
-        ])
+        updates = []
+        for i, row in enumerate(all_vals[1:], start=2):   # row 2 onward
+            ts = str(row[ts_col - 1]).strip()
+            if ts in timestamps:
+                updates.append({"range": f"{chr(64+status_col)}{i}",
+                                 "values": [[new_status]]})
+                if sentence_updates and ts in sentence_updates:
+                    updates.append({"range": f"{chr(64+sentence_col)}{i}",
+                                     "values": [[sentence_updates[ts]]]})
 
-        # Mark Review row as Transferred using Timestamp as key
-        ts = str(review_row.get("Timestamp", "")).strip()
-        if ts:
-            cell = review_ws.find(ts)
-            if cell:
-                review_ws.update_cell(cell.row, 7, "Transferred")  # Column G = 狀態
-
-        return True, "OK"
+        if updates:
+            ws.batch_update(updates)
+        return True
     except Exception as e:
-        return False, str(e)
+        st.error(f"Google Sheets update error: {e}")
+        return False
 
 # ============================================================
 # 6. PDF BUILDER
 # ============================================================
-def create_pdf(school_name: str, level: str, questions: list, student_name: str = None) -> bytes:
+def create_pdf(school: str, level: str, questions: list,
+               student_name: str = None) -> bytes:
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     styles = getSampleStyleSheet()
@@ -175,10 +176,12 @@ def create_pdf(school_name: str, level: str, questions: list, student_name: str 
     title_style = ParagraphStyle("T", parent=styles["Heading1"], fontName=fn,
                                  fontSize=20, alignment=TA_CENTER, spaceAfter=12)
     body_style  = ParagraphStyle("B", parent=styles["Normal"], fontName=fn,
-                                 fontSize=14, leading=20, leftIndent=25, firstLineIndent=-25)
+                                 fontSize=14, leading=20,
+                                 leftIndent=25, firstLineIndent=-25)
 
-    title_text = (f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>"
-                  if student_name else f"<b>{school_name} ({level}) - 校本填充工作紙</b>")
+    title_text = (f"<b>{school} ({level}) - {student_name} - 校本填充工作紙</b>"
+                  if student_name
+                  else f"<b>{school} ({level}) - 校本填充工作紙</b>")
 
     story = [
         Paragraph(title_text, title_style),
@@ -186,9 +189,8 @@ def create_pdf(school_name: str, level: str, questions: list, student_name: str 
         Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", body_style),
         Spacer(1, 0.3 * inch),
     ]
-
     for i, row in enumerate(questions):
-        content = str(row.get("Content", ""))
+        content = str(row.get("句子", row.get("Content", "")))
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         content = re.sub(r'【(.+?)】',    r'<u>\1</u>', content)
         story.append(Paragraph(f"{i+1}. {content}", body_style))
@@ -201,26 +203,27 @@ def create_pdf(school_name: str, level: str, questions: list, student_name: str 
 # ============================================================
 # 7. EMAIL SENDER
 # ============================================================
-def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
+def send_email_with_pdf(to_email, student_name, school, grade,
+                         pdf_bytes, cc_email=None):
     try:
-        sg_cfg    = st.secrets["sendgrid"]
+        cfg       = st.secrets["sendgrid"]
         recipient = str(to_email).strip()
         if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
             return False, f"無效電郵格式: '{recipient}'"
 
         safe_name = re.sub(r'[^\w\-]', '_', str(student_name).strip())
         msg = Mail(
-            from_email=Email(sg_cfg["from_email"], sg_cfg.get("from_name", "")),
+            from_email=Email(cfg["from_email"], cfg.get("from_name", "")),
             to_emails=recipient,
-            subject=f"【工作紙】{school_name} ({grade}) - {student_name} 的校本填充練習",
+            subject=f"【工作紙】{school} ({grade}) - {student_name} 的校本填充練習",
             html_content=f"""
                 <p>親愛的家長您好：</p>
-                <p>附件為 <strong>{student_name}</strong> 同學在 <strong>{school_name} ({grade})</strong> 的校本填充工作紙。</p>
+                <p>附件為 <strong>{student_name}</strong> 同學在
+                <strong>{school} ({grade})</strong> 的校本填充工作紙。</p>
                 <p>請下載並列印供同學練習。祝 學習愉快！</p>
                 <br><p>-- 自動發送系統 --</p>
             """
         )
-
         if cc_email:
             cc = str(cc_email).strip().lower()
             if cc not in ["n/a", "nan", "", "none"] and "@" in cc and cc != recipient.lower():
@@ -228,13 +231,14 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
 
         encoded = base64.b64encode(pdf_bytes).decode()
         msg.add_attachment(Attachment(
-            FileContent(encoded), FileName(f"{safe_name}_Worksheet.pdf"),
-            FileType("application/pdf"), Disposition("attachment")
+            FileContent(encoded),
+            FileName(f"{safe_name}_Worksheet.pdf"),
+            FileType("application/pdf"),
+            Disposition("attachment")
         ))
-
-        resp = SendGridAPIClient(sg_cfg["api_key"]).send(msg)
-        return (True, "發送成功") if 200 <= resp.status_code < 300 else (False, f"HTTP {resp.status_code}")
-
+        resp = SendGridAPIClient(cfg["api_key"]).send(msg)
+        return (True, "發送成功") if 200 <= resp.status_code < 300 \
+               else (False, f"HTTP {resp.status_code}")
     except HTTPError as e:
         try:    return False, e.body.decode("utf-8")
         except: return False, str(e)
@@ -242,7 +246,7 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         return False, str(e)
 
 # ============================================================
-# 8. PDF PREVIEW HELPER
+# 8. PDF PREVIEW
 # ============================================================
 def show_pdf_preview(pdf_bytes: bytes):
     try:
@@ -256,252 +260,315 @@ def show_pdf_preview(pdf_bytes: bytes):
 # 9. SIDEBAR
 # ============================================================
 with st.sidebar:
-    st.image("https://placehold.co/260x60/4A90D9/white?text=Worksheet+Admin", use_container_width=True)
+    st.markdown("## 🎯 Worksheet Admin")
     st.divider()
 
     if not CHINESE_FONT:
-        st.error("⚠️ Chinese font not found.\nPlease add Kai.ttf to your repo.")
+        st.error("⚠️ Chinese font not found.\nAdd Kai.ttf to your repo root.")
     else:
         st.success("✅ Font OK")
 
     st.divider()
-    if st.button("🔄 Refresh All Data", use_container_width=True):
-        clear_all_cache()
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        clear_cache()
         st.rerun()
+    st.caption("Data auto-refreshes every 30 seconds.")
 
-    st.caption("Data auto-refreshes every 60 seconds.")
+    st.divider()
+    st.markdown("### 📊 Status Legend")
+    st.markdown("""
+- 🟢 **Ready** — DB 句子，可直接使用
+- 🟡 **Pending** — AI 句子，需要審批
+- 🔵 **Loaded** — 已被 App 取走處理中
+- ✅ **Sent** — 已發送，不再顯示
+""")
 
 # ============================================================
-# 10. MAIN TABS
+# 10. LOAD DATA
 # ============================================================
 st.title("🎯 Worksheet Admin")
-tab_review, tab_generate = st.tabs(["📥  Step 1 — 審批新詞", "📄  Step 2 — 生成工作紙"])
+
+raw_review  = load_review()
+student_df  = load_students()
 
 # ============================================================
-# TAB 1 — REVIEW & APPROVAL
+# 11. VALIDATE REVIEW SHEET
 # ============================================================
-with tab_review:
-    st.subheader("審批新詞語 · 移交至題庫")
-    st.caption("從 Google Form 自動進入 Review 表的詞語，在這裡選句、修改，然後移交至 Standby 題庫。")
+REQUIRED_COLS = ["Timestamp", "學校", "年級", "詞語", "句子", "來源", "狀態"]
 
-    review_df = load_review()
+if raw_review.empty:
+    st.info("📭 Review 表目前沒有資料。等待老師填寫 Google Form。")
+    st.stop()
 
-    if review_df.empty:
-        st.info("📭 Review 表目前沒有資料。")
+missing = [c for c in REQUIRED_COLS if c not in raw_review.columns]
+if missing:
+    st.error(f"❌ Review 表缺少欄位：{missing}")
+    st.write("現有欄位：", raw_review.columns.tolist())
+    st.stop()
+
+# Filter: only show Ready + Pending (not Loaded / Sent)
+active_df = raw_review[raw_review["狀態"].isin(["Ready", "Pending"])].copy()
+
+if active_df.empty:
+    st.success("🎉 目前沒有待處理的詞語。所有資料已發送或正在處理中。")
+    st.stop()
+
+# ============================================================
+# 12. LEVEL & SCHOOL SELECTOR (Sidebar-style inside main)
+# ============================================================
+col_ctrl, col_main = st.columns([1, 3])
+
+with col_ctrl:
+    st.markdown("### ⚙️ 篩選")
+    levels  = sorted(active_df["年級"].astype(str).unique().tolist())
+    sel_lvl = st.selectbox("年級", levels, key="sel_level")
+
+    lvl_df  = active_df[active_df["年級"] == sel_lvl]
+    schools = sorted(lvl_df["學校"].astype(str).unique().tolist())
+    sel_sch = st.selectbox("學校", schools, key="sel_school")
+
+    lot_df  = lvl_df[lvl_df["學校"] == sel_sch].copy()
+
+    # Stats
+    n_ready   = len(lot_df[lot_df["狀態"] == "Ready"])
+    n_pending = len(lot_df[lot_df["狀態"] == "Pending"])
+    st.metric("🟢 Ready (DB)", n_ready)
+    st.metric("🟡 Pending (AI)", n_pending)
+
+    st.divider()
+    send_mode = st.radio("發送模式", ["📄 預覽 & 下載", "📧 按學生寄送"], key="send_mode")
+
+# ============================================================
+# 13. MAIN PANEL — WORD CARDS
+# ============================================================
+with col_main:
+    st.markdown(f"### 📋 {sel_sch} · {sel_lvl} 詞語清單")
+
+    if lot_df.empty:
+        st.info("此學校/年級沒有待處理的詞語。")
+        st.stop()
+
+    # --- Session state: store final chosen sentences ---
+    # Key: timestamp, Value: final sentence string
+    if "chosen" not in st.session_state:
+        st.session_state["chosen"] = {}
+
+    # Reset chosen if school/level changed
+    state_key = f"{sel_sch}_{sel_lvl}"
+    if st.session_state.get("last_lot") != state_key:
+        st.session_state["chosen"] = {}
+        st.session_state["last_lot"] = state_key
+
+    words = lot_df["詞語"].unique().tolist()
+    all_ready = True   # track if all AI words have been approved
+
+    for word in words:
+        word_rows = lot_df[lot_df["詞語"] == word]
+        source    = str(word_rows.iloc[0]["來源"]).strip()
+        status    = str(word_rows.iloc[0]["狀態"]).strip()
+        ts        = str(word_rows.iloc[0]["Timestamp"]).strip()
+
+        if source == "DB":
+            badge = '<span class="badge-db">📗 資料庫</span>'
+        elif status == "Pending":
+            badge = '<span class="badge-pending">⏳ AI 待審批</span>'
+            all_ready = False
+        else:
+            badge = '<span class="badge-ai">🤖 AI 已審批</span>'
+
+        st.markdown(f"""
+        <div class="word-card">
+            <b style="font-size:17px">{word}</b>&nbsp;&nbsp;{badge}
+        </div>
+        """, unsafe_allow_html=True)
+
+        if source == "DB":
+            # DB: single sentence, editable, auto-approved
+            sentence = str(word_rows.iloc[0]["句子"]).strip()
+            final = st.text_area(
+                f"句子（可修改）", value=sentence,
+                key=f"db_{ts}", height=75, label_visibility="collapsed"
+            )
+            st.session_state["chosen"][ts] = final
+
+        else:
+            # AI: radio select among options + optional manual override
+            options = word_rows["句子"].astype(str).tolist()
+            chosen_opt = st.radio(
+                "選擇 AI 句子", options,
+                key=f"rad_{ts}", horizontal=False
+            )
+            override = st.text_input(
+                "✏️ 手動輸入（留空則使用上方選擇）",
+                value="", placeholder=chosen_opt,
+                key=f"ovr_{ts}"
+            )
+            final = override.strip() if override.strip() else chosen_opt
+            st.session_state["chosen"][ts] = final
+
+            if status == "Pending":
+                all_ready = False   # still needs explicit approval
+
+        st.write("")  # spacing
+
+    # ============================================================
+    # 14. MARK AS LOADED BUTTON
+    # ============================================================
+    st.divider()
+
+    if not all_ready:
+        st.warning("⚠️ 仍有 AI 句子未選定。請在上方為每個 AI 詞語選擇句子後再繼續。")
+
+    # Build final questions list from session state
+    def build_questions() -> list:
+        rows = []
+        for word in words:
+            word_rows = lot_df[lot_df["詞語"] == word]
+            ts = str(word_rows.iloc[0]["Timestamp"]).strip()
+            sentence = st.session_state["chosen"].get(ts, str(word_rows.iloc[0]["句子"]))
+            rows.append({
+                "詞語": word,
+                "句子": sentence,
+                "Timestamp": ts,
+                "學校": sel_sch,
+                "年級": sel_lvl,
+            })
+        return rows
+
+    def mark_lot_loaded():
+        """Mark all words in this lot as Loaded in Review sheet."""
+        timestamps = [str(lot_df.iloc[i]["Timestamp"]).strip()
+                      for i in range(len(lot_df))]
+        sentence_updates = {ts: st.session_state["chosen"].get(ts, "")
+                            for ts in timestamps}
+        return mark_rows_in_review(timestamps, "Loaded",
+                                   sentence_updates=sentence_updates)
+
+    def mark_lot_sent():
+        """Mark all words in this lot as Sent in Review sheet."""
+        timestamps = [str(lot_df.iloc[i]["Timestamp"]).strip()
+                      for i in range(len(lot_df))]
+        return mark_rows_in_review(timestamps, "Sent")
+
+    # ============================================================
+    # 15A. MODE: PREVIEW & DOWNLOAD
+    # ============================================================
+    if send_mode == "📄 預覽 & 下載":
+        if st.button("📄 生成 PDF 預覽", use_container_width=True,
+                     disabled=not all_ready, type="primary"):
+            questions = build_questions()
+            pdf_bytes = create_pdf(sel_sch, sel_lvl, questions)
+
+            # Mark as Loaded immediately
+            with st.spinner("更新 Review 表狀態為 Loaded..."):
+                mark_lot_loaded()
+                clear_cache()
+
+            st.download_button(
+                label=f"📥 下載 {sel_sch}_{sel_lvl}.pdf",
+                data=pdf_bytes,
+                file_name=f"{sel_sch}_{sel_lvl}_{datetime.date.today()}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
+            st.markdown("#### 🔍 PDF 預覽")
+            show_pdf_preview(pdf_bytes)
+
+            if st.button("✅ 確認完成，標記為 Sent", use_container_width=True):
+                with st.spinner("更新狀態為 Sent..."):
+                    mark_lot_sent()
+                    clear_cache()
+                st.success("✅ 已標記為 Sent，下次不再顯示。")
+                st.rerun()
+
+    # ============================================================
+    # 15B. MODE: SEND BY STUDENT
+    # ============================================================
     else:
-        # Only show non-transferred rows
-        pending_df = review_df[review_df.get("狀態", review_df.get("Status", pd.Series(dtype=str))).astype(str).str.strip() != "Transferred"].copy()
+        st.markdown("#### 👨‍👩‍👧 按學生寄送")
 
-        if pending_df.empty:
-            st.success("🎉 所有詞語已審批完成！")
+        if student_df.empty:
+            st.error("❌ 無法讀取「學生資料」工作表。")
+            st.stop()
+
+        req_cols = ["學校", "年級", "狀態", "學生姓名", "家長 Email"]
+        miss     = [c for c in req_cols if c not in student_df.columns]
+        if miss:
+            st.error(f"「學生資料」缺少欄位：{miss}")
+            st.stop()
+
+        active_students = student_df[student_df["狀態"] == "Y"]
+        matched = active_students[
+            (active_students["學校"] == sel_sch) &
+            (active_students["年級"] == sel_lvl)
+        ]
+
+        if matched.empty:
+            st.warning("⚠️ 沒有符合此學校/年級的學生（狀態 = Y）。")
+            with st.expander("🔍 排查資料"):
+                st.write("Review 學校:", sel_sch, "| 年級:", sel_lvl)
+                st.write("學生資料 學校:", active_students["學校"].unique().tolist())
+                st.write("學生資料 年級:", active_students["年級"].unique().tolist())
         else:
-            # Level selector
-            levels = sorted(pending_df["年級"].astype(str).unique().tolist())
-            sel_level = st.selectbox("📚 選擇年級", levels, key="review_level")
+            st.success(f"✅ 找到 {len(matched)} 位學生")
 
-            level_data = pending_df[pending_df["年級"].astype(str) == sel_level]
-            words = level_data["詞語"].unique().tolist()
+            questions = build_questions()
+            sent_all  = []
 
-            # Stats row
-            c1, c2, c3 = st.columns(3)
-            c1.metric("待審批詞語", len(words))
-            c2.metric("DB 句子", len(level_data[level_data["來源"] == "DB"]["詞語"].unique()))
-            c3.metric("AI 句子", len(level_data[level_data["來源"] == "AI"]["詞語"].unique()))
+            for _, student in matched.iterrows():
+                student_name  = student["學生姓名"]
+                parent_email  = student["家長 Email"]
+                teacher_email = student.get("老師 Email", None)
 
-            st.divider()
+                pdf_bytes = create_pdf(sel_sch, sel_lvl, questions,
+                                       student_name=student_name)
 
-            # --- Word Cards ---
-            for word in words:
-                word_rows = level_data[level_data["詞語"] == word]
-                source    = str(word_rows.iloc[0].get("來源", "AI")).strip()
-                school    = str(word_rows.iloc[0].get("學校", "")).strip()
-                ts        = str(word_rows.iloc[0].get("Timestamp", "")).strip()
+                with st.container(border=True):
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        st.markdown(f"**👤 {student_name}**")
+                        st.caption(f"📧 {parent_email}")
+                        if teacher_email:
+                            st.caption(f"👩‍🏫 CC: {teacher_email}")
 
-                badge = (f'<span class="badge-db">📗 資料庫</span>' if source == "DB"
-                         else f'<span class="badge-ai">🤖 AI 生成</span>')
+                        st.download_button(
+                            "📥 下載 PDF", data=pdf_bytes,
+                            file_name=f"{student_name}_{sel_lvl}_{datetime.date.today()}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key=f"dl_{parent_email}",
+                            disabled=not all_ready
+                        )
 
-                st.markdown(f"""
-                <div class="word-card">
-                    <b style="font-size:18px">{word}</b>&nbsp;&nbsp;{badge}
-                    &nbsp;&nbsp;<span style="color:#888;font-size:13px">🏫 {school} · {sel_level}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-                with st.container():
-                    if source == "DB":
-                        # Single sentence — just confirm
-                        content = str(word_rows.iloc[0].get("句子", "")).strip()
-                        final   = st.text_area("✏️ 確認句子（可修改）", value=content, key=f"ta_{word}_{ts}", height=80)
-                        if st.button(f"✅ 移交「{word}」", key=f"btn_{word}_{ts}", type="primary"):
-                            with st.spinner("移交中..."):
-                                ok, msg = move_word_to_standby(word_rows.iloc[0].to_dict(), final)
-                            if ok:
-                                st.toast(f"✅ 「{word}」已移交！", icon="🎉")
-                                clear_all_cache()
-                                st.rerun()
-                            else:
-                                st.error(f"移交失敗：{msg}")
-
-                    else:
-                        # Multiple AI options — radio select
-                        options = word_rows["句子"].astype(str).tolist()
-                        chosen  = st.radio("選擇最合適的 AI 句子", options, key=f"rad_{word}_{ts}")
-                        final   = st.text_area("✏️ 手動微調（選填，留空則使用上方選擇）",
-                                               value="", placeholder=chosen,
-                                               key=f"ta_{word}_{ts}", height=80)
-                        use_sentence = final.strip() if final.strip() else chosen
-
-                        if st.button(f"🚀 批准並移交「{word}」", key=f"btn_{word}_{ts}", type="primary"):
-                            with st.spinner("移交中..."):
-                                ok, msg = move_word_to_standby(word_rows.iloc[0].to_dict(), use_sentence)
-                            if ok:
-                                st.toast(f"✅ 「{word}」已移交！", icon="🎉")
-                                clear_all_cache()
-                                st.rerun()
-                            else:
-                                st.error(f"移交失敗：{msg}")
-
-                st.write("")  # spacing
-
-# ============================================================
-# TAB 2 — GENERATE WORKSHEETS
-# ============================================================
-with tab_generate:
-    st.subheader("生成工作紙 · 下載或寄送")
-    st.caption("從 Standby 題庫讀取已審批的題目，生成 PDF 並寄送給家長。")
-
-    standby_df = load_standby()
-    student_df = load_students()
-
-    if standby_df.empty:
-        st.warning("⚠️ Standby 題庫是空的。請先在 Step 1 完成審批移交。")
-        st.stop()
-
-    # Normalize column names
-    col_map = {"Grade": "Level", "grade": "Level", "level": "Level",
-               "school": "School", "word": "Word", "content": "Content", "status": "Status"}
-    standby_df = standby_df.rename(columns={k: v for k, v in col_map.items() if k in standby_df.columns})
-
-    required = ["School", "Level", "Word", "Content", "Status"]
-    missing  = [c for c in required if c not in standby_df.columns]
-    if missing:
-        st.error(f"Standby 表缺少欄位：{missing}。現有欄位：{standby_df.columns.tolist()}")
-        st.stop()
-
-    # Normalize status
-    standby_df["_status_clean"] = (standby_df["Status"].astype(str)
-                                   .str.replace("\u00A0", " ").str.replace("\u3000", " ").str.strip())
-    ready_df = standby_df[standby_df["_status_clean"].isin(["Ready", "Waiting"])]
-
-    if ready_df.empty:
-        st.info("Standby 中沒有 Ready/Waiting 的題目。")
-        st.stop()
-
-    # --- Sidebar-style controls inside tab ---
-    ctrl_col, main_col = st.columns([1, 2])
-
-    with ctrl_col:
-        st.markdown("#### ⚙️ 設定")
-        levels_sb = sorted(ready_df["Level"].astype(str).unique().tolist())
-        sel_level = st.selectbox("年級", levels_sb, key="gen_level")
-
-        level_ready = ready_df[ready_df["Level"].astype(str) == sel_level]
-        schools_sb  = sorted(level_ready["School"].unique().tolist())
-        sel_school  = st.selectbox("學校", schools_sb, key="gen_school")
-
-        mode = st.radio("發送模式", ["📄 預覽 & 下載", "📧 按學生寄送"], key="gen_mode")
-
-        school_data = level_ready[level_ready["School"] == sel_school]
-        st.metric("題目數", len(school_data))
-
-    with main_col:
-        if school_data.empty:
-            st.info("請在左側選擇學校。")
-        else:
-            # Show question list
-            with st.expander("📋 查看題目列表", expanded=False):
-                st.dataframe(school_data[["Word", "Content"]].reset_index(drop=True),
-                             use_container_width=True, hide_index=True)
-
-            # ---- MODE A: Preview & Download ----
-            if mode == "📄 預覽 & 下載":
-                pdf_bytes = create_pdf(sel_school, sel_level, school_data.to_dict("records"))
-
-                dl_col, _ = st.columns([1, 1])
-                with dl_col:
-                    st.download_button(
-                        label=f"📥 下載 {sel_school}_{sel_level}.pdf",
-                        data=pdf_bytes,
-                        file_name=f"{sel_school}_{sel_level}_{datetime.date.today()}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-
-                st.markdown("#### 🔍 PDF 預覽")
-                show_pdf_preview(pdf_bytes)
-
-            # ---- MODE B: Send by Student ----
-            else:
-                if student_df.empty:
-                    st.error("❌ 無法讀取「學生資料」工作表。")
-                    st.stop()
-
-                req_cols = ["學校", "年級", "狀態", "學生姓名", "家長 Email"]
-                miss     = [c for c in req_cols if c not in student_df.columns]
-                if miss:
-                    st.error(f"「學生資料」缺少欄位：{miss}")
-                    st.stop()
-
-                active = student_df[student_df["狀態"] == "Y"]
-                merged = active.merge(school_data, left_on=["學校", "年級"],
-                                      right_on=["School", "Level"], how="inner")
-
-                if merged.empty:
-                    st.warning("⚠️ 沒有符合條件的學生配對。")
-                    with st.expander("🔍 排查資料"):
-                        st.write("Standby School:", school_data["School"].unique().tolist())
-                        st.write("Standby Level:", school_data["Level"].unique().tolist())
-                        st.write("學生資料 學校:", active["學校"].unique().tolist())
-                        st.write("學生資料 年級:", active["年級"].unique().tolist())
-                else:
-                    unique_students = merged["家長 Email"].nunique()
-                    st.success(f"✅ 配對到 {unique_students} 位學生")
-
-                    for parent_email, grp in merged.groupby("家長 Email"):
-                        student_name  = grp["學生姓名"].iloc[0]
-                        school_name   = grp["學校"].iloc[0]
-                        grade         = grp["年級"].iloc[0]
-                        teacher_email = grp["老師 Email"].iloc[0] if "老師 Email" in grp.columns else None
-
-                        pdf_bytes = create_pdf(school_name, grade, grp.to_dict("records"), student_name=student_name)
-
-                        with st.container(border=True):
-                            s1, s2 = st.columns([1, 2])
-                            with s1:
-                                st.markdown(f"**👤 {student_name}**")
-                                st.caption(f"🏫 {school_name} ({grade})")
-                                st.caption(f"📧 {parent_email}")
-                                if teacher_email:
-                                    st.caption(f"👩‍🏫 CC: {teacher_email}")
-
-                                st.download_button(
-                                    f"📥 下載 PDF",
-                                    data=pdf_bytes,
-                                    file_name=f"{student_name}_{grade}_{datetime.date.today()}.pdf",
-                                    mime="application/pdf",
-                                    use_container_width=True,
-                                    key=f"dl_{parent_email}"
+                        if st.button(f"📧 寄送給家長",
+                                     key=f"send_{parent_email}",
+                                     use_container_width=True,
+                                     disabled=not all_ready):
+                            with st.spinner(f"寄送給 {parent_email}..."):
+                                # Mark Loaded before sending
+                                mark_lot_loaded()
+                                ok, msg = send_email_with_pdf(
+                                    parent_email, student_name,
+                                    sel_sch, sel_lvl, pdf_bytes,
+                                    cc_email=teacher_email
                                 )
-                                if st.button(f"📧 寄送給家長", key=f"send_{parent_email}", use_container_width=True):
-                                    with st.spinner("寄送中..."):
-                                        ok, msg = send_email_with_pdf(
-                                            parent_email, student_name, school_name, grade,
-                                            pdf_bytes, cc_email=teacher_email
-                                        )
-                                    if ok:
-                                        st.success("✅ 已寄出！")
-                                    else:
-                                        st.error(f"❌ {msg}")
+                            if ok:
+                                st.success(f"✅ 已寄出！")
+                                sent_all.append(parent_email)
+                            else:
+                                st.error(f"❌ {msg}")
+                    with c2:
+                        if all_ready:
+                            show_pdf_preview(pdf_bytes)
+                        else:
+                            st.info("請先完成所有 AI 句子審批才能預覽。")
 
-                            with s2:
-                                show_pdf_preview(pdf_bytes)
+            # After all sent, mark Sent
+            if sent_all and len(sent_all) == len(matched):
+                st.divider()
+                if st.button("✅ 全部已寄出，標記為 Sent", use_container_width=True, type="primary"):
+                    with st.spinner("更新 Review 表..."):
+                        mark_lot_sent()
+                        clear_cache()
+                    st.success("✅ 已標記為 Sent，下次不再顯示。")
+                    st.rerun()
