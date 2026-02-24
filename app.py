@@ -241,8 +241,10 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     """
     Create teacher answer PDF with answers visible.
     Original question order is preserved (no randomization).
-    Answers are shown inside 【】 brackets.
+    Answers are shown clearly highlighted - NOT hidden with underlines.
     """
+    from reportlab.lib.colors import blue, red
+    
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
@@ -264,7 +266,7 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         fontName=font_name,
         fontSize=16,
         alignment=TA_CENTER,
-        textColor='red',
+        textColor=red,
         spaceAfter=12
     )
     normal_style = ParagraphStyle(
@@ -276,16 +278,6 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         leftIndent=25,
         firstLineIndent=-25
     )
-    answer_style = ParagraphStyle(
-        'AnswerStyle',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=14,
-        leading=20,
-        leftIndent=25,
-        firstLineIndent=-25,
-        textColor='blue'
-    )
 
     # Title with "教師版答案" indicator
     if student_name:
@@ -294,7 +286,7 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         title_text = f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
 
     story.append(Paragraph(title_text, title_style))
-    story.append(Paragraph("<b>📚 教師版答案 (Answer Key)</b>", subtitle_style))
+    story.append(Paragraph("<b>教師版答案 (Answer Key)</b>", subtitle_style))
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
@@ -302,10 +294,13 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     # Keep original order - NO randomization for teacher version
     for i, row in enumerate(questions):
         content = row['Content']
-        # Keep answers visible: highlight answers in brackets with bold/color
-        # Replace 【answer】 with <b><font color="blue">【answer】</font></b>
-        content = re.sub(r'【】(.+?)【】', r'<b><font color="blue">【\1】</font></b>', content)
-        content = re.sub(r'【(.+?)】', r'<b><font color="blue">【\1】</font></b>', content)
+        
+        # IMPORTANT: For teacher version, we show answers clearly instead of hiding them
+        # Pattern 1: 【】answer【】 -> show answer in red bold
+        content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+        # Pattern 2: 【answer】 -> show answer in red bold  
+        content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
+        
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
         story.append(Spacer(1, 0.15*inch))
