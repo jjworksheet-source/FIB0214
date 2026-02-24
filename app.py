@@ -174,10 +174,22 @@ edited_df = st.data_editor(
     hide_index=True
 )
 
-# --- 4. GENERATE PDF FUNCTION (Student Version - with Randomization) ---
+# --- HELPER: Shuffle questions once for consistency across all documents ---
+def shuffle_questions(questions):
+    """
+    Shuffle questions list using current timestamp as seed.
+    Returns a new shuffled list (does not modify original).
+    """
+    questions_list = list(questions)
+    random.seed(int(time.time() * 1000))
+    random.shuffle(questions_list)
+    return questions_list
+
+# --- 4. GENERATE PDF FUNCTION (Student Version) ---
 def create_pdf(school_name, level, questions, student_name=None):
     """
-    Create student PDF with randomized question order.
+    Create student PDF.
+    Questions are displayed in the order provided (no internal shuffling).
     Answers are hidden (replaced with underlines).
     Page 2: Vocabulary table with unique words from the "Word" column.
     """
@@ -200,10 +212,10 @@ def create_pdf(school_name, level, questions, student_name=None):
         'CustomNormal',
         parent=styles['Normal'],
         fontName=font_name,
-        fontSize=14,
-        leading=20,
-        leftIndent=25,
-        firstLineIndent=-25
+        fontSize=18,
+        leading=26,
+        leftIndent=30,
+        firstLineIndent=-30
     )
     vocab_title_style = ParagraphStyle(
         'VocabTitle',
@@ -224,23 +236,15 @@ def create_pdf(school_name, level, questions, student_name=None):
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
-    # --- FEATURE 1: Randomize question order ---
-    # Create a copy of questions list to avoid modifying the original
-    questions_list = list(questions)
-    
-    # Use current timestamp as seed for different order each time
-    random.seed(int(time.time() * 1000))
-    random.shuffle(questions_list)
-
-    # Generate questions with sequential numbering (1, 2, 3...) after shuffling
-    for i, row in enumerate(questions_list):
+    # Generate questions in the order provided (shuffling done externally)
+    for i, row in enumerate(questions):
         content = row['Content']
         # Hide answers: replace 【answer】 with underline
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
-        story.append(Spacer(1, 0.15*inch))
+        story.append(Spacer(1, 0.2*inch))
 
     # --- PAGE 2: Vocabulary Table ---
     # Extract unique words from the "Word" column
@@ -286,7 +290,7 @@ def create_pdf(school_name, level, questions, student_name=None):
 def create_answer_pdf(school_name, level, questions, student_name=None):
     """
     Create teacher answer PDF with answers visible.
-    Original question order is preserved (no randomization).
+    Questions are displayed in the order provided (same as student PDF).
     Answers are shown clearly highlighted in RED - using the "Word" column.
     """
     from reportlab.lib.colors import blue, red
@@ -319,10 +323,10 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         'CustomNormal',
         parent=styles['Normal'],
         fontName=font_name,
-        fontSize=14,
-        leading=20,
-        leftIndent=25,
-        firstLineIndent=-25
+        fontSize=18,
+        leading=26,
+        leftIndent=30,
+        firstLineIndent=-30
     )
 
     # Title with "教師版答案" indicator
@@ -337,7 +341,7 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
-    # Keep original order - NO randomization for teacher version
+    # Display questions in the order provided (same order as student PDF)
     for i, row in enumerate(questions):
         content = row['Content']
         
@@ -369,7 +373,7 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
-        story.append(Spacer(1, 0.15*inch))
+        story.append(Spacer(1, 0.2*inch))
 
     doc.build(story)
     bio.seek(0)
@@ -438,6 +442,10 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         return False, str(e)
 
 def create_docx(school_name, level, questions, student_name=None):
+    """
+    Create Word document with questions.
+    Questions are displayed in the order provided (same as PDFs).
+    """
     doc = Document()
 
     if student_name:
@@ -457,7 +465,7 @@ def create_docx(school_name, level, questions, student_name=None):
         content_clean = re.sub(r'【|】', '', content)
         p = doc.add_paragraph(style='List Number')
         run = p.add_run(f"{content_clean}")
-        run.font.size = Pt(14)
+        run.font.size = Pt(18)
 
     bio = io.BytesIO()
     doc.save(bio)
@@ -492,15 +500,20 @@ if send_mode == "📄 按學校預覽下載":
 
         col1, col2 = st.columns([1, 2])
 
-        # Generate student PDF (randomized)
-        pdf_buffer = create_pdf(selected_school, selected_level, school_data.to_dict('records'))
+        # Shuffle questions ONCE for consistency across all documents
+        original_questions = school_data.to_dict('records')
+        shuffled_questions = shuffle_questions(original_questions)
+        
+        # Generate all documents with the SAME shuffled question order
+        pdf_buffer = create_pdf(selected_school, selected_level, shuffled_questions)
         pdf_bytes = pdf_buffer.getvalue()
         
-        # Generate teacher answer PDF (original order, answers visible)
-        answer_pdf_buffer = create_answer_pdf(selected_school, selected_level, school_data.to_dict('records'))
+        # Teacher answer PDF uses same order as student PDF
+        answer_pdf_buffer = create_answer_pdf(selected_school, selected_level, shuffled_questions)
         answer_pdf_bytes = answer_pdf_buffer.getvalue()
         
-        docx_buffer = create_docx(selected_school, selected_level, school_data.to_dict('records'))
+        # Word document uses same order
+        docx_buffer = create_docx(selected_school, selected_level, shuffled_questions)
         docx_bytes = docx_buffer.getvalue()
 
         with col1:
@@ -620,15 +633,20 @@ else:
         st.divider()
         col1, col2 = st.columns([1, 2])
 
-        # Generate student PDF (randomized)
-        pdf_buffer = create_pdf(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
+        # Shuffle questions ONCE for consistency across all documents for this student
+        original_questions = unique_group.to_dict('records')
+        shuffled_questions = shuffle_questions(original_questions)
+        
+        # Generate all documents with the SAME shuffled question order
+        pdf_buffer = create_pdf(school_name, grade, shuffled_questions, student_name=student_name)
         pdf_bytes  = pdf_buffer.getvalue()
         
-        # Generate teacher answer PDF (original order, answers visible)
-        answer_pdf_buffer = create_answer_pdf(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
+        # Teacher answer PDF uses same order as student PDF
+        answer_pdf_buffer = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name)
         answer_pdf_bytes = answer_pdf_buffer.getvalue()
         
-        docx_buffer = create_docx(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
+        # Word document uses same order
+        docx_buffer = create_docx(school_name, grade, shuffled_questions, student_name=student_name)
         docx_bytes  = docx_buffer.getvalue()
 
         with col1:
