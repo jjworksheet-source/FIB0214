@@ -184,7 +184,7 @@ def create_pdf(school_name, level, questions, student_name=None):
         'CustomTitle',
         parent=styles['Heading1'],
         fontName=font_name,
-        fontSize=20,
+        fontSize=22,
         alignment=TA_CENTER,
         spaceAfter=12
     )
@@ -381,7 +381,7 @@ else:
         st.error("❌ 無法讀取「學生資料」工作表，請確認工作表名稱正確。")
         st.stop()
 
-    required_cols = ['學校', '年級', '狀態', '學生姓名', '家長 Email']
+    required_cols = ['學校', '年級', '狀態', '學生姓名', '學生編號', '家長 Email']
     missing_cols = [c for c in required_cols if c not in student_df.columns]
     if missing_cols:
         st.error(f"❌ 「學生資料」工作表缺少以下欄位：{missing_cols}")
@@ -394,8 +394,19 @@ else:
         st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。請先將測試學生的狀態改為 Y。")
         st.stop()
 
+    # 只保留有勾選 Select 的題目（避免未勾選都被配對）
+    questions_df = edited_df
+    if 'Select' in questions_df.columns:
+        questions_df = questions_df[questions_df['Select'] == True]
+
+    # 題目去重：優先用 standby 的 ID（最穩陣）；如果冇 ID 就用 Content
+    if 'ID' in questions_df.columns:
+        questions_df = questions_df.drop_duplicates(subset=['ID'])
+    else:
+        questions_df = questions_df.drop_duplicates(subset=['School', 'Level', 'Content'])
+
     merged = active_students.merge(
-        edited_df,
+        questions_df,
         left_on=['學校', '年級'],
         right_on=['School', 'Level'],
         how='inner'
@@ -414,36 +425,51 @@ else:
             st.write("**學生資料 的 年級 值：**", active_students['年級'].unique().tolist())
         st.stop()
 
-    st.success(f"✅ 成功配對 {merged['家長 Email'].nunique()} 位學生，共 {len(merged)} 題")
+    student_count = merged['學生編號'].nunique()
+    st.success(f"✅ 成功配對 {student_count} 位學生（按學生編號），共 {len(merged)} 筆配對資料")
 
-    for parent_email, group in merged.groupby('家長 Email'):
+    # ✅ 每位學生一份：按「學生編號」分組
+    for student_id, group in merged.groupby('學生編號'):
+        # 由 group 取回真正的家長電郵（分組 key 已經唔係 email）
+        parent_email = str(group['家長 Email'].iloc[0]).strip()
+
         student_name  = group['學生姓名'].iloc[0]
         school_name   = group['學校'].iloc[0]
         grade         = group['年級'].iloc[0]
         teacher_email = group['老師 Email'].iloc[0] if '老師 Email' in group.columns else "N/A"
 
+        # 保險：每位學生的題目再去重一次（避免任何上游重覆）
+        if 'ID' in group.columns:
+            unique_group = group.drop_duplicates(subset=['ID'])
+            question_count = unique_group['ID'].nunique()
+        else:
+            unique_group = group.drop_duplicates(subset=['Content'])
+            question_count = unique_group['Content'].nunique()
+
         st.divider()
         col1, col2 = st.columns([1, 2])
 
-        pdf_buffer = create_pdf(school_name, grade, group.to_dict('records'), student_name=student_name)
+        pdf_buffer = create_pdf(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
         pdf_bytes  = pdf_buffer.getvalue()
-        docx_buffer = create_docx(school_name, grade, group.to_dict('records'), student_name=student_name)
+        docx_buffer = create_docx(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
         docx_bytes  = docx_buffer.getvalue()
 
         with col1:
             st.write(f"**👤 學生：** {student_name}")
+            st.write(f"**🆔 學生編號：** {student_id}")
             st.write(f"**🏫 學校：** {school_name} ({grade})")
             st.write(f"**📧 家長：** {parent_email}")
             st.write(f"**👩‍🏫 老師：** {teacher_email}")
-            st.write(f"**📝 題目數：** {len(group)} 題")
+            st.write(f"**📝 題目數：** {question_count} 題")
 
+            # ✅ key 用 student_id，避免同一測試 email 撞 key
             st.download_button(
                 label=f"📥 下載 {student_name} PDF",
                 data=pdf_bytes,
                 file_name=f"{student_name}_{grade}_Review_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
-                key=f"dl_{parent_email}"
+                key=f"dl_{student_id}"
             )
             st.download_button(
                 label=f"📄 下載 {student_name} Word 檔（可編輯）",
@@ -451,16 +477,20 @@ else:
                 file_name=f"{student_name}_{grade}_Review_{datetime.date.today()}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
-                key=f"dl_docx_{parent_email}"
+                key=f"dl_docx_{student_id}"
             )
 
-            if st.button(f"📧 寄送給 {student_name} 家長", key=f"send_{parent_email}", use_container_width=True):
+            if st.button(
+                f"📧 寄送給 {student_name} 家長",
+                key=f"send_{student_id}",
+                use_container_width=True
+            ):
                 with st.spinner(f"正在寄送給 {parent_email}..."):
                     success, msg = send_email_with_pdf(
                         parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
                     )
                     if success:
-                        st.success(f"✅ 已成功寄送！")
+                        st.success("✅ 已成功寄送！")
                     else:
                         st.error(f"❌ 發送失敗: {msg}")
                         st.code(msg)
