@@ -26,7 +26,8 @@ try:
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+    from reportlab.lib import colors
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.enums import TA_CENTER
@@ -178,6 +179,7 @@ def create_pdf(school_name, level, questions, student_name=None):
     """
     Create student PDF with randomized question order.
     Answers are hidden (replaced with underlines).
+    Page 2: Vocabulary table with unique words from the "Word" column.
     """
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
@@ -202,6 +204,14 @@ def create_pdf(school_name, level, questions, student_name=None):
         leading=20,
         leftIndent=25,
         firstLineIndent=-25
+    )
+    vocab_title_style = ParagraphStyle(
+        'VocabTitle',
+        parent=styles['Heading2'],
+        fontName=font_name,
+        fontSize=20,
+        alignment=TA_CENTER,
+        spaceAfter=20
     )
 
     if student_name:
@@ -231,6 +241,42 @@ def create_pdf(school_name, level, questions, student_name=None):
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
         story.append(Spacer(1, 0.15*inch))
+
+    # --- PAGE 2: Vocabulary Table ---
+    # Extract unique words from the "Word" column
+    words = [row.get('Word', '').strip() for row in questions]
+    unique_words = list(dict.fromkeys([w for w in words if w]))  # Remove duplicates, preserve order
+    
+    if unique_words:
+        story.append(PageBreak())
+        story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Organize words into rows (4 columns)
+        num_cols = 4
+        table_data = []
+        for i in range(0, len(unique_words), num_cols):
+            row = unique_words[i:i+num_cols]
+            # Pad row with empty strings if needed
+            while len(row) < num_cols:
+                row.append('')
+            table_data.append(row)
+        
+        # Create table with styling
+        col_width = 1.5*inch
+        vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
+        vocab_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 14),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(vocab_table)
 
     doc.build(story)
     bio.seek(0)
