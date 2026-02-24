@@ -241,7 +241,7 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     """
     Create teacher answer PDF with answers visible.
     Original question order is preserved (no randomization).
-    Answers are shown clearly highlighted - NOT hidden with underlines.
+    Answers are shown clearly highlighted in RED - using the "Word" column.
     """
     from reportlab.lib.colors import blue, red
     
@@ -295,11 +295,31 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     for i, row in enumerate(questions):
         content = row['Content']
         
-        # IMPORTANT: For teacher version, we show answers clearly instead of hiding them
-        # Pattern 1: 【】answer【】 -> show answer in red bold
-        content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-        # Pattern 2: 【answer】 -> show answer in red bold  
-        content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
+        # Get the answer from the "Word" column
+        answer = row.get('Word', '')
+        
+        # Strategy: The Content field may have blanks in different formats:
+        # 1. Underscores: ________ or ＿＿＿＿
+        # 2. Brackets with answer: 【answer】
+        # 3. Empty brackets: 【】text【】
+        
+        # First, try to replace underscores/blanks with the answer from Word column
+        if answer:
+            # Replace various blank patterns with the highlighted answer
+            answer_html = f'<font color="red"><b>【{answer}】</b></font>'
+            
+            # Pattern: Multiple underscores (half-width or full-width)
+            content = re.sub(r'_{2,}|＿{2,}', answer_html, content)
+            
+            # Pattern: 【】text【】 (empty brackets surrounding text - keep original behavior)
+            content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+            
+            # Pattern: 【answer】 (answer inside brackets)
+            content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
+        else:
+            # No Word answer - try bracket patterns only
+            content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
         
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
