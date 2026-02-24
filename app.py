@@ -7,6 +7,8 @@ import io
 import os
 import re
 import base64
+import random
+import time
 from pdf2image import convert_from_bytes
 from docx import Document
 from docx.shared import Pt
@@ -171,8 +173,12 @@ edited_df = st.data_editor(
     hide_index=True
 )
 
-# --- 4. GENERATE PDF FUNCTION ---
+# --- 4. GENERATE PDF FUNCTION (Student Version - with Randomization) ---
 def create_pdf(school_name, level, questions, student_name=None):
+    """
+    Create student PDF with randomized question order.
+    Answers are hidden (replaced with underlines).
+    """
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
@@ -208,10 +214,98 @@ def create_pdf(school_name, level, questions, student_name=None):
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
+    # --- FEATURE 1: Randomize question order ---
+    # Create a copy of questions list to avoid modifying the original
+    questions_list = list(questions)
+    
+    # Use current timestamp as seed for different order each time
+    random.seed(int(time.time() * 1000))
+    random.shuffle(questions_list)
+
+    # Generate questions with sequential numbering (1, 2, 3...) after shuffling
+    for i, row in enumerate(questions_list):
+        content = row['Content']
+        # Hide answers: replace 【answer】 with underline
+        content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
+        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
+        p = Paragraph(f"{i+1}. {content}", normal_style)
+        story.append(p)
+        story.append(Spacer(1, 0.15*inch))
+
+    doc.build(story)
+    bio.seek(0)
+    return bio
+
+# --- FEATURE 2: Teacher Answer PDF Function ---
+def create_answer_pdf(school_name, level, questions, student_name=None):
+    """
+    Create teacher answer PDF with answers visible.
+    Original question order is preserved (no randomization).
+    Answers are shown inside 【】 brackets.
+    """
+    bio = io.BytesIO()
+    doc = SimpleDocTemplate(bio, pagesize=letter)
+    story = []
+
+    styles = getSampleStyleSheet()
+    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontName=font_name,
+        fontSize=22,
+        alignment=TA_CENTER,
+        spaceAfter=12
+    )
+    subtitle_style = ParagraphStyle(
+        'CustomSubtitle',
+        parent=styles['Heading2'],
+        fontName=font_name,
+        fontSize=16,
+        alignment=TA_CENTER,
+        textColor='red',
+        spaceAfter=12
+    )
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=14,
+        leading=20,
+        leftIndent=25,
+        firstLineIndent=-25
+    )
+    answer_style = ParagraphStyle(
+        'AnswerStyle',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=14,
+        leading=20,
+        leftIndent=25,
+        firstLineIndent=-25,
+        textColor='blue'
+    )
+
+    # Title with "教師版答案" indicator
+    if student_name:
+        title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>"
+    else:
+        title_text = f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
+
+    story.append(Paragraph(title_text, title_style))
+    story.append(Paragraph("<b>📚 教師版答案 (Answer Key)</b>", subtitle_style))
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
+    story.append(Spacer(1, 0.3*inch))
+
+    # Keep original order - NO randomization for teacher version
     for i, row in enumerate(questions):
         content = row['Content']
-        content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
-        content = re.sub(r'【(.+?)】', r'<u>\1</u>', content)
+        # Keep answers visible: highlight answers in brackets with bold/color
+        # Replace 【answer】 with <b><font color="blue">【answer】</font></b>
+        content = re.sub(r'【】(.+?)【】', r'<b><font color="blue">【\1】</font></b>', content)
+        content = re.sub(r'【(.+?)】', r'<b><font color="blue">【\1】</font></b>', content)
         p = Paragraph(f"{i+1}. {content}", normal_style)
         story.append(p)
         story.append(Spacer(1, 0.15*inch))
@@ -337,8 +431,14 @@ if send_mode == "📄 按學校預覽下載":
 
         col1, col2 = st.columns([1, 2])
 
+        # Generate student PDF (randomized)
         pdf_buffer = create_pdf(selected_school, selected_level, school_data.to_dict('records'))
         pdf_bytes = pdf_buffer.getvalue()
+        
+        # Generate teacher answer PDF (original order, answers visible)
+        answer_pdf_buffer = create_answer_pdf(selected_school, selected_level, school_data.to_dict('records'))
+        answer_pdf_bytes = answer_pdf_buffer.getvalue()
+        
         docx_buffer = create_docx(selected_school, selected_level, school_data.to_dict('records'))
         docx_bytes = docx_buffer.getvalue()
 
@@ -363,6 +463,16 @@ if send_mode == "📄 按學校預覽下載":
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"dl_docx_{selected_school}_{selected_level}"
+            )
+            
+            # --- FEATURE 2: Teacher Answer PDF Download Button ---
+            st.download_button(
+                label=f"📥 下載教師版答案 PDF",
+                data=answer_pdf_bytes,
+                file_name=f"{selected_school}_{selected_level}_教師版答案_{datetime.date.today()}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"dl_answer_{selected_school}_{selected_level}"
             )
             
             st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
@@ -449,8 +559,14 @@ else:
         st.divider()
         col1, col2 = st.columns([1, 2])
 
+        # Generate student PDF (randomized)
         pdf_buffer = create_pdf(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
         pdf_bytes  = pdf_buffer.getvalue()
+        
+        # Generate teacher answer PDF (original order, answers visible)
+        answer_pdf_buffer = create_answer_pdf(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
+        answer_pdf_bytes = answer_pdf_buffer.getvalue()
+        
         docx_buffer = create_docx(school_name, grade, unique_group.to_dict('records'), student_name=student_name)
         docx_bytes  = docx_buffer.getvalue()
 
@@ -478,6 +594,16 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"dl_docx_{student_id}"
+            )
+            
+            # --- FEATURE 2: Teacher Answer PDF Download Button ---
+            st.download_button(
+                label=f"📥 下載教師版答案 PDF",
+                data=answer_pdf_bytes,
+                file_name=f"{student_name}_{grade}_教師版答案_{datetime.date.today()}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                key=f"dl_answer_{student_id}"
             )
 
             if st.button(
