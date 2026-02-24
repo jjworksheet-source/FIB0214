@@ -8,6 +8,9 @@ import os
 import re
 import base64
 from pdf2image import convert_from_bytes
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileType, Disposition, Email
 from python_http_client.exceptions import HTTPError
@@ -279,6 +282,33 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
     except Exception as e:
         return False, str(e)
 
+def create_docx(school_name, level, questions, student_name=None):
+    doc = Document()
+
+    if student_name:
+        title_text = f"{school_name} ({level}) - {student_name} - 校本填充工作紙"
+    else:
+        title_text = f"{school_name} ({level}) - 校本填充工作紙"
+
+    title = doc.add_heading(title_text, level=0)
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+    date_para = doc.add_paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
+    date_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    doc.add_paragraph("")
+
+    for i, row in enumerate(questions):
+        content = row['Content']
+        content_clean = re.sub(r'【|】', '', content)
+        p = doc.add_paragraph(style='List Number')
+        run = p.add_run(f"{content_clean}")
+        run.font.size = Pt(14)
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio
+    
 # --- Helper: Render PDF pages as images ---
 def display_pdf_as_images(pdf_bytes):
     try:
@@ -309,6 +339,8 @@ if send_mode == "📄 按學校預覽下載":
 
         pdf_buffer = create_pdf(selected_school, selected_level, school_data.to_dict('records'))
         pdf_bytes = pdf_buffer.getvalue()
+        docx_buffer = create_docx(selected_school, selected_level, school_data.to_dict('records'))
+        docx_bytes = docx_buffer.getvalue()
 
         with col1:
             st.write(f"**School:** {selected_school}")
@@ -324,6 +356,15 @@ if send_mode == "📄 按學校預覽下載":
                 key=f"dl_{selected_school}_{selected_level}"
             )
 
+            st.download_button(
+                label=f"📄 下載 Word 檔（可編輯）",
+                data=docx_bytes,
+                file_name=f"{selected_school}_{selected_level}_Review_{datetime.date.today()}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key=f"dl_docx_{selected_school}_{selected_level}"
+            )
+            
             st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
 
         with col2:
@@ -386,6 +427,8 @@ else:
 
         pdf_buffer = create_pdf(school_name, grade, group.to_dict('records'), student_name=student_name)
         pdf_bytes  = pdf_buffer.getvalue()
+        docx_buffer = create_docx(school_name, grade, group.to_dict('records'), student_name=student_name)
+        docx_bytes  = docx_buffer.getvalue()
 
         with col1:
             st.write(f"**👤 學生：** {student_name}")
@@ -401,6 +444,14 @@ else:
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_{parent_email}"
+            )
+            st.download_button(
+                label=f"📄 下載 {student_name} Word 檔（可編輯）",
+                data=docx_bytes,
+                file_name=f"{student_name}_{grade}_Review_{datetime.date.today()}.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                key=f"dl_docx_{parent_email}"
             )
 
             if st.button(f"📧 寄送給 {student_name} 家長", key=f"send_{parent_email}", use_container_width=True):
