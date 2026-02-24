@@ -20,6 +20,9 @@ from python_http_client.exceptions import HTTPError
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
 st.title("📝 Worksheet Generator")
+# --- Initialize session state for shuffled questions ---
+if 'shuffled_cache' not in st.session_state:
+    st.session_state.shuffled_cache = {}
 
 # Try to import reportlab and handle font registration
 try:
@@ -107,6 +110,9 @@ if df.empty:
 
 # --- 3. FILTER & SELECT ---
 st.subheader("Select Questions")
+if st.button("🔀 重新打亂題目順序"):
+    st.session_state.shuffled_cache = {}
+    st.rerun()
 
 if "Status" not in df.columns:
     st.error("Column 'Status' not found. Please check your Google Sheet headers.")
@@ -175,14 +181,21 @@ edited_df = st.data_editor(
 )
 
 # --- HELPER: Shuffle questions once for consistency across all documents ---
-def shuffle_questions(questions):
+def get_shuffled_questions(questions, cache_key):
     """
-    Shuffle questions list using current timestamp as seed.
-    Returns a new shuffled list (does not modify original).
+    Get shuffled questions with caching.
+    Same cache_key returns same order within session.
+    Different sessions get different random orders.
     """
+    # Check if already shuffled in this session
+    if cache_key in st.session_state.shuffled_cache:
+        return st.session_state.shuffled_cache[cache_key]
+
+    # First time: shuffle and cache
     questions_list = list(questions)
     random.seed(int(time.time() * 1000))
     random.shuffle(questions_list)
+    st.session_state.shuffled_cache[cache_key] = questions_list
     return questions_list
 
 # --- 4. GENERATE PDF FUNCTION (Student Version) ---
@@ -502,7 +515,8 @@ if send_mode == "📄 按學校預覽下載":
 
         # Shuffle questions ONCE for consistency across all documents
         original_questions = school_data.to_dict('records')
-        shuffled_questions = shuffle_questions(original_questions)
+        cache_key = f"school_{selected_school}_{selected_level}"
+        shuffled_questions = get_shuffled_questions(original_questions, cache_key)
         
         # Generate all documents with the SAME shuffled question order
         pdf_buffer = create_pdf(selected_school, selected_level, shuffled_questions)
@@ -635,7 +649,8 @@ else:
 
         # Shuffle questions ONCE for consistency across all documents for this student
         original_questions = unique_group.to_dict('records')
-        shuffled_questions = shuffle_questions(original_questions)
+        cache_key = f"student_{student_id}_{grade}"
+        shuffled_questions = get_shuffled_questions(original_questions, cache_key)
         
         # Generate all documents with the SAME shuffled question order
         pdf_buffer = create_pdf(school_name, grade, shuffled_questions, student_name=student_name)
