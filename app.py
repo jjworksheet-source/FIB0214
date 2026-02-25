@@ -227,8 +227,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         fontName=font_name,
         fontSize=18,
         leading=26,
-        leftIndent=36,      # 增加左縮排
-        firstLineIndent=-36  # 首行負縮排（與 leftIndent 相同）
+        leftIndent=0,      # 增加左縮排
+        firstLineIndent=0  # 首行負縮排（與 leftIndent 相同）
 
     )
     vocab_title_style = ParagraphStyle(
@@ -253,12 +253,21 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     # Generate questions in the order provided (shuffling done externally)
     for i, row in enumerate(questions):
         content = row['Content']
-        # Hide answers: replace 【answer】 with underline
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
-        p = Paragraph(f"{i+1}. {content}", normal_style)
-        story.append(p)
-        story.append(Spacer(1, 0.2*inch))
+    
+        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
+        content_para = Paragraph(content, normal_style)
+    
+        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
+        t.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.15*inch))
 
     # --- PAGE 2: Vocabulary Table ---
     # Extract unique words from the "Word" column using ORIGINAL order
@@ -342,8 +351,8 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         fontName=font_name,
         fontSize=18,
         leading=26,
-        leftIndent=30,
-        firstLineIndent=-30
+        leftIndent=0,
+        firstLineIndent=0
     )
 
     # Title with "教師版答案" indicator
@@ -388,9 +397,18 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
             content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
         
-        p = Paragraph(f"{i+1}. {content}", normal_style)
-        story.append(p)
-        story.append(Spacer(1, 0.2*inch))
+        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
+        content_para = Paragraph(content, normal_style)
+        
+        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
+        t.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.15*inch))
 
     doc.build(story)
     bio.seek(0)
