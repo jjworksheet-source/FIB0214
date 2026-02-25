@@ -293,18 +293,18 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
             table_data.append(row)
         
         # Create table with styling
-        col_width = 1.5*inch
+        col_width = 1.8*inch
         vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
         vocab_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 14),
+            ('FONTSIZE', (0, 0), (-1, -1), 20),        # ← 改大字體（原本14）
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
-            ('LEFTPADDING', (0, 0), (-1, -1), 8),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 16),       # ← 增加上下padding
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),    # ← 增加上下padding
+            ('LEFTPADDING', (0, 0), (-1, -1), 12),      # ← 增加左右padding
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),     # ← 增加左右padding
         ]))
         story.append(vocab_table)
 
