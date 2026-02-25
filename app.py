@@ -199,7 +199,7 @@ def get_shuffled_questions(questions, cache_key):
     return questions_list
 
 # --- 4. GENERATE PDF FUNCTION (Student Version) ---
-def create_pdf(school_name, level, questions, student_name=None, original_questions=None)::
+def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
     """
     Create student PDF.
     Questions are displayed in the order provided (no internal shuffling).
