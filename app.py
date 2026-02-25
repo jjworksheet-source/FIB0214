@@ -227,8 +227,9 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         fontName=font_name,
         fontSize=18,
         leading=26,
-        leftIndent=30,
-        firstLineIndent=-30
+        leftIndent=36,      # 增加左縮排
+        firstLineIndent=-36  # 首行負縮排（與 leftIndent 相同）
+)
     )
     vocab_title_style = ParagraphStyle(
         'VocabTitle',
