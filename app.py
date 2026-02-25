@@ -199,7 +199,7 @@ def get_shuffled_questions(questions, cache_key):
     return questions_list
 
 # --- 4. GENERATE PDF FUNCTION (Student Version) ---
-def create_pdf(school_name, level, questions, student_name=None):
+def create_pdf(school_name, level, questions, student_name=None, original_questions=None)::
     """
     Create student PDF.
     Questions are displayed in the order provided (no internal shuffling).
@@ -260,8 +260,11 @@ def create_pdf(school_name, level, questions, student_name=None):
         story.append(Spacer(1, 0.2*inch))
 
     # --- PAGE 2: Vocabulary Table ---
-    # Extract unique words from the "Word" column
-    words = [row.get('Word', '').strip() for row in questions]
+    # Extract unique words from the "Word" column using ORIGINAL order
+    if original_questions is not None:
+        words = [row.get('Word', '').strip() for row in original_questions]
+    else:
+        words = [row.get('Word', '').strip() for row in questions]
     unique_words = list(dict.fromkeys([w for w in words if w]))  # Remove duplicates, preserve order
     
     if unique_words:
@@ -519,7 +522,7 @@ if send_mode == "📄 按學校預覽下載":
         shuffled_questions = get_shuffled_questions(original_questions, cache_key)
         
         # Generate all documents with the SAME shuffled question order
-        pdf_buffer = create_pdf(selected_school, selected_level, shuffled_questions)
+        pdf_buffer = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions)
         pdf_bytes = pdf_buffer.getvalue()
         
         # Teacher answer PDF uses same order as student PDF
@@ -653,7 +656,7 @@ else:
         shuffled_questions = get_shuffled_questions(original_questions, cache_key)
         
         # Generate all documents with the SAME shuffled question order
-        pdf_buffer = create_pdf(school_name, grade, shuffled_questions, student_name=student_name)
+        pdf_buffer = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions)
         pdf_bytes  = pdf_buffer.getvalue()
         
         # Teacher answer PDF uses same order as student PDF
