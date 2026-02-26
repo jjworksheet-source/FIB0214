@@ -238,24 +238,50 @@ def build_final_pool_for_batch(batch_key, word_dict):
 
     return questions
 
+
+def mark_review_rows_done(row_keys, status_value='已完成'):
+    """
+    Update the Review worksheet to mark the given rows as done.
+    row_keys: list of strings in the form "<batch_key>||<word>||<idx>" where idx is the DataFrame index (0-based).
+    This will update the sheet row = idx + 2 (header at row 1).
+    """
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        ws = sh.worksheet("Review")
+        headers = ws.row_values(1)
+        # prefer Chinese column name '狀態', fallback to 'Status'
+        if '狀態' in headers:
+            status_col_index = headers.index('狀態') + 1
+        elif 'Status' in headers:
+            status_col_index = headers.index('Status') + 1
+        else:
+            # create '狀態' column at the end
+            status_col_index = len(headers) + 1
+            ws.update_cell(1, status_col_index, '狀態')
+
+        for rk in row_keys:
+            parts = rk.split('||')
+            try:
+                idx = int(parts[-1])
+            except Exception:
+                # skip malformed keys
+                continue
+            sheet_row = idx + 2
+            try:
+                ws.update_cell(sheet_row, status_col_index, status_value)
+            except Exception:
+                # continue on per-row failure; best effort
+                continue
+    except Exception as e:
+        # surface the warning but don't crash the app
+        st.warning(f"Mark review rows done failed: {e}")
+
 # ============================================================
 # --- 3. SIDEBAR ---
 # ============================================================
 student_df = load_students()
 review_df  = load_review()
 review_groups = build_review_groups(review_df)
-
-# ── Global auto-confirm: runs on EVERY page load, regardless of mode ──
-# Batches where ALL words are original sentences (no AI candidates)
-# are confirmed automatically so Mode A / B work without visiting AI Review first.
-for _batch_key, _word_dict in review_groups.items():
-    if _batch_key not in st.session_state.confirmed_batches:
-        _has_any_ai = any(d['needs_review'] for d in _word_dict.values())
-        if not _has_any_ai:
-            _final_qs = build_final_pool_for_batch(_batch_key, _word_dict)
-            if _final_qs:
-                st.session_state.final_pool[_batch_key] = _final_qs
-                st.session_state.confirmed_batches.add(_batch_key)
 
 with st.sidebar:
     st.header("⚙️ 控制面板")
@@ -863,6 +889,17 @@ if send_mode == "🤖 AI 句子審核":
                     final_qs = build_final_pool_for_batch(batch_key, word_dict)
                     st.session_state.final_pool[batch_key] = final_qs
                     st.session_state.confirmed_batches.add(batch_key)
+
+                    # --- Mark corresponding Review rows as Done (Status) ---
+                    try:
+                        all_row_keys = []
+                        for _w, _d in word_dict.items():
+                            all_row_keys.extend(_d.get('row_keys', []))
+                        if all_row_keys:
+                            mark_review_rows_done(all_row_keys, status_value='已完成')
+                    except Exception as _e:
+                        st.warning(f"無法更新 Review 表狀態: {_e}")
+
                     st.success(f"🎉 已確認！{school_r} {level_r} 共 {len(final_qs)} 題鎖入題庫，PDF 現已解鎖。")
                     st.rerun()
             else:
