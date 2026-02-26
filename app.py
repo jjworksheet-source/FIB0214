@@ -253,8 +253,13 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     # Generate questions in the order provided (shuffling done externally)
     for i, row in enumerate(questions):
         content = row['Content']
+        # 1. 先處理專名號
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
-        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
+        # 2. 再處理填充題
+        content = re.sub(r'【[^】]+】', r'<u>________</u>', content)
+        # 3. 解決開頭底線失效問題
+        if content.startswith('<u>'):
+            content = '&#8203;' + content
     
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
         content_para = Paragraph(content, normal_style)
@@ -389,13 +394,11 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
             
             # Pattern: 【】text【】 (empty brackets surrounding text - keep original behavior)
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-            
-            # Pattern: 【answer】 (answer inside brackets)
-            content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【[^】]+】', r'<font color="red"><b>【\1】</b></font>', content)
         else:
             # No Word answer - try bracket patterns only
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-            content = re.sub(r'【(.+?)】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【[^】]+】', r'<font color="red"><b>【\1】</b></font>', content)
         
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
         content_para = Paragraph(content, normal_style)
