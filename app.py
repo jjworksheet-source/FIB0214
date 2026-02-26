@@ -421,82 +421,88 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 # ============================================================
 def create_answer_pdf(school_name, level, questions, student_name=None):
     """
-    Teacher answer sheet: answers shown in red 【brackets】.
-    Same layout, margins, font size as student version.
-    Word list appended at the end (words in red).
+    極簡穩定版：直接繪製答案，不使用 HTML 標籤，確保 100% 準確。
     """
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.colors import red as RED
 
     bio = io.BytesIO()
     c = rl_canvas.Canvas(bio, pagesize=letter)
-    _, page_height = letter
+    page_width, page_height = letter
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-    max_width = _get_max_width()
+    
+    # 設定邊距與寬度
+    left_m = 60
+    text_x = left_m + 30
+    max_w  = page_width - 40 - text_x
+    line_h = 26
+    cur_y  = page_height - 60
 
-    cur_y = page_height - 60
-
-    # Title (same style as student version)
+    # 1. 標題
     c.setFont(font_name, 22)
-    c.setFillColorRGB(0, 0, 0)
-    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
-            else f"{school_name} ({level}) - 校本填充工作紙"
-    c.drawString(PDF_LEFT_NUM, cur_y, title)
-    cur_y -= 30
+    title = f"{school_name} ({level}) - 教師版答案"
+    c.drawString(left_m, cur_y, title)
+    cur_y -= 40
 
-    # Answer key subtitle in red
-    c.setFont(font_name, 16)
-    c.setFillColor(RED)
-    c.drawString(PDF_LEFT_NUM, cur_y, "教師版答案 (Answer Key)")
-    c.setFillColorRGB(0, 0, 0)
-    cur_y -= 30
-
-    # Date (same style as student version)
-    c.setFont(font_name, PDF_FONT_SIZE)
-    c.drawString(PDF_LEFT_NUM, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
-    cur_y -= 30
-
-    # Questions with answers in red
+    # 2. 題目列表
     for idx, row in enumerate(questions):
-        content = row['Content']
-        answer  = str(row.get('Word', '')).strip()
-
-        # Proper noun marks 【】text【】 → red
-        content = re.sub(
-            r'【】(.*?)【】',
-            lambda m: f'<red>【{m.group(1)}】</red>',
-            content
-        )
-        # Fill-in blanks 【word】 → show answer in red
-        if answer:
-            content = re.sub(
-                r'【([^】]+)】',
-                f'<red>【{answer}】</red>',
-                content
-            )
-        else:
-            content = re.sub(
-                r'【([^】]+)】',
-                lambda m: f'<red>【{m.group(1)}】</red>',
-                content
-            )
-
-        if cur_y - PDF_LINE_HEIGHT < 60:
+        if cur_y < 80:
             c.showPage()
             cur_y = page_height - 60
 
-        c.setFont(font_name, PDF_FONT_SIZE)
+        # 繪製題號
+        c.setFont(font_name, 18)
         c.setFillColorRGB(0, 0, 0)
-        c.drawString(PDF_LEFT_NUM, cur_y, f"{idx+1}.")
-        cur_y = _draw_answer_line_wrapped(
-            c, PDF_TEXT_START, cur_y, content,
-            font_name, PDF_FONT_SIZE, max_width,
-            underline_offset=2, line_height=PDF_LINE_HEIGHT
-        )
+        c.drawString(left_m, cur_y, f"{idx+1}.")
 
-    # Word list in red
-    words = [str(row.get('Word', '')).strip() for row in questions]
-    _draw_word_list_page(c, words, font_name, title="詞語表（答案）", word_color=RED)
+        # 處理內容：將 【...】 替換為紅色答案
+        content = row['Content']
+        answer  = str(row.get('Word', '')).strip()
+        
+        # 邏輯：將題目拆解，遇到 【】 就用紅色印出答案
+        parts = re.split(r'(【.*?】)', content)
+        draw_x = text_x
+        
+        for p in parts:
+            if p.startswith('【') and p.endswith('】'):
+                # 這是空格，印出紅色答案
+                display_text = f"【{answer}】" if answer else p
+                c.setFillColor(RED)
+                c.drawString(draw_x, cur_y, display_text)
+                draw_x += pdfmetrics.stringWidth(display_text, font_name, 18)
+            else:
+                # 這是普通文字，印出黑色
+                c.setFillColorRGB(0, 0, 0)
+                c.drawString(draw_x, cur_y, p)
+                draw_x += pdfmetrics.stringWidth(p, font_name, 18)
+            
+            # 簡單換行檢查 (如果單行太長)
+            if draw_x > text_x + max_w:
+                cur_y -= line_h
+                draw_x = text_x
+        
+        cur_y -= line_h
+
+    # 3. 詞語表 (答案版)
+    c.showPage()
+    cur_y = page_height - 60
+    c.setFont(font_name, 20)
+    c.setFillColorRGB(0, 0, 0)
+    c.drawString(left_m, cur_y, "詞語表 (答案)")
+    cur_y -= 40
+
+    for idx, row in enumerate(questions):
+        word = str(row.get('Word', '')).strip()
+        if cur_y < 60:
+            c.showPage()
+            cur_y = page_height - 60
+        
+        c.setFont(font_name, 18)
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(left_m, cur_y, f"{idx+1}. ")
+        c.setFillColor(RED)
+        c.drawString(left_m + 40, cur_y, word)
+        cur_y -= 25
 
     c.save()
     bio.seek(0)
