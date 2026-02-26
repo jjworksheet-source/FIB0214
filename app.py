@@ -238,7 +238,7 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     for i, row in enumerate(questions):
         content = row['Content']
         # 1. 先處理專名號
-        content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
+        content = re.sub(r' [] (.*?) [] ', r'<u>\1</u>', content)
         # 2. 再處理填充題
         content = re.sub(r'【[^】]+】', r'<u>________</u>', content)
         # 3. 解決開頭底線失效問題（只做一次）
@@ -355,12 +355,12 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
             # Replace underscores with answer
             content = re.sub(r'_{2,}|＿{2,}', answer_html, content)
             # Handle 【】text【】 proper noun marks
-            content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【】(.*?)【】', r'<font color="red"><b>【\1】</b></font>', content)
             # Handle 【answer】 blanks — fixed: added capture group ()
             content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
         else:
             # No Word answer - handle bracket patterns only
-            content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【】(.*?)【】', r'<font color="red"><b>【\1】</b></font>', content)
             # Fixed: added capture group ()
             content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
 
