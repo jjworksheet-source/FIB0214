@@ -18,8 +18,8 @@ from sendgrid.helpers.mail import Mail, Attachment, FileContent, FileName, FileT
 from python_http_client.exceptions import HTTPError
 
 # --- 1. SETUP & CONNECTION ---
-st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
-st.title("📝 Worksheet Generator")
+st.set_page_config(page_title="Worksheet Generator", page_icon="📝", layout="wide")
+st.title("📝 校本填充工作紙生成器")
 
 if 'shuffled_cache' not in st.session_state:
     st.session_state.shuffled_cache = {}
@@ -42,7 +42,6 @@ try:
             try:
                 pdfmetrics.registerFont(TTFont('ChineseFont', path))
                 CHINESE_FONT = 'ChineseFont'
-                st.success(f"✅ Font loaded: {path}")
                 break
             except Exception:
                 continue
@@ -63,7 +62,6 @@ try:
     )
     client = gspread.authorize(creds)
     SHEET_ID = st.secrets["app_config"]["spreadsheet_id"]
-    st.success("✅ Connected to Google Cloud!")
 except Exception as e:
     st.error(f"❌ Connection Error: {e}")
     st.stop()
@@ -91,23 +89,12 @@ def load_students():
         st.error(f"Error reading 學生資料 sheet: {e}")
         return pd.DataFrame()
 
-if st.button("🔄 Refresh Data"):
-    load_data.clear()
-    load_students.clear()
-    st.rerun()
-
 df = load_data()
 student_df = load_students()
 
 if df.empty:
     st.warning("The 'standby' sheet is empty or could not be read.")
     st.stop()
-
-# --- 3. FILTER & SELECT ---
-st.subheader("Select Questions")
-if st.button("🔀 重新打亂題目順序"):
-    st.session_state.shuffled_cache = {}
-    st.rerun()
 
 if "Status" not in df.columns:
     st.error("Column 'Status' not found. Please check your Google Sheet headers.")
@@ -134,18 +121,63 @@ for col in df.columns:
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("🎓 篩選年級")
+    st.header("⚙️ 控制面板")
+
+    # Refresh & Shuffle
+    col_r, col_s = st.columns(2)
+    with col_r:
+        if st.button("🔄 更新資料", use_container_width=True):
+            load_data.clear()
+            load_students.clear()
+            st.rerun()
+    with col_s:
+        if st.button("🔀 打亂題目", use_container_width=True):
+            st.session_state.shuffled_cache = {}
+            st.rerun()
+
+    st.divider()
+
+    st.subheader("🎓 年級")
     available_levels = sorted(df["Level"].astype(str).str.strip().unique().tolist())
-    selected_level = st.radio("選擇年級", available_levels, index=0)
+    selected_level = st.radio("選擇年級", available_levels, index=0, label_visibility="collapsed")
+
     st.divider()
-    st.info(f"目前顯示：**{selected_level}** 的題目")
-    st.divider()
-    st.header("📬 發送模式")
+
+    st.subheader("📬 模式")
     send_mode = st.radio(
         "選擇模式",
-        ["📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送 (配對學生資料)"],
-        index=0
+        ["📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送"],
+        index=0,
+        label_visibility="collapsed"
     )
+
+    st.divider()
+
+    # Stats dashboard
+    st.subheader("📊 資料概覽")
+    status_norm_sidebar = (
+        df["Status"].astype(str)
+        .str.replace("\u00A0", " ", regex=False)
+        .str.replace("\u3000", " ", regex=False)
+        .str.strip()
+    )
+    total_ready = status_norm_sidebar.isin(["Ready", "Waiting"]).sum()
+    level_ready = (
+        status_norm_sidebar.isin(["Ready", "Waiting"]) &
+        (df["Level"].astype(str).str.strip() == selected_level)
+    ).sum()
+    schools_count = df.loc[
+        status_norm_sidebar.isin(["Ready", "Waiting"]) &
+        (df["Level"].astype(str).str.strip() == selected_level), "School"
+    ].nunique()
+
+    st.metric("全部就緒題目", total_ready)
+    st.metric(f"{selected_level} 就緒題目", level_ready)
+    st.metric(f"{selected_level} 學校數", schools_count)
+
+    if not student_df.empty and '狀態' in student_df.columns:
+        active_count = (student_df['狀態'] == 'Y').sum()
+        st.metric("啟用學生數", active_count)
 
 status_norm = (
     df["Status"]
@@ -158,16 +190,20 @@ level_norm = df["Level"].astype(str).str.strip()
 ready_df = df[status_norm.isin(["Ready", "Waiting"]) & (level_norm == selected_level)]
 
 if ready_df.empty:
-    st.info(f"No questions with status 'Ready' or 'Waiting' for {selected_level}.")
+    st.info(f"⚠️ {selected_level} 目前沒有狀態為 Ready / Waiting 的題目。")
     st.stop()
+
+st.subheader(f"📋 題目列表 — {selected_level}")
+st.caption(f"共 {len(ready_df)} 題，可在下方勾選／取消要納入工作紙的題目。")
 
 edited_df = st.data_editor(
     ready_df,
     column_config={
-        "Select": st.column_config.CheckboxColumn("Generate?", default=True)
+        "Select": st.column_config.CheckboxColumn("納入？", default=True)
     },
     disabled=["School", "Level", "Word"],
-    hide_index=True
+    hide_index=True,
+    use_container_width=True
 )
 
 # --- HELPER: Shuffle questions once per session ---
@@ -421,109 +457,82 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 # ============================================================
 def create_answer_pdf(school_name, level, questions, student_name=None):
     """
-    教師版：只輸出「詞語表（題目順序）」，
-    依題目順序列出所有 Word，紅色顯示。
+    Teacher answer sheet: answers shown in red 【brackets】.
+    Same layout, margins, font size as student version.
+    Word list appended at the end (words in red).
     """
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.colors import red as RED
 
     bio = io.BytesIO()
     c = rl_canvas.Canvas(bio, pagesize=letter)
-    page_width, page_height = letter
-    font_name = CHINESE_FONT if CHINESE_FONT else "Helvetica"
+    _, page_height = letter
+    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+    max_width = _get_max_width()
 
-    left_m   = 60
-    line_h   = 26
-    cur_y    = page_height - 80
+    cur_y = page_height - 60
 
-    # 標題：詞語清單（題目順序）
+    # Title (same style as student version)
     c.setFont(font_name, 22)
     c.setFillColorRGB(0, 0, 0)
-    title = "詞語清單（題目順序）"
-    c.drawString(left_m, cur_y, title)
-    cur_y -= 40
+    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
+            else f"{school_name} ({level}) - 校本填充工作紙"
+    c.drawString(PDF_LEFT_NUM, cur_y, title)
+    cur_y -= 30
 
-    c.setFont(font_name, 18)
-
-    for idx, row in enumerate(questions, start=1):
-        word = str(row.get("Word", "")).strip()
-
-        # 換頁檢查
-        if cur_y < 60:
-            c.showPage()
-            cur_y = page_height - 80
-            c.setFont(font_name, 22)
-            c.setFillColorRGB(0, 0, 0)
-            c.drawString(left_m, cur_y, "詞語清單（題目順序）（續）")
-            cur_y -= 40
-            c.setFont(font_name, 18)
-
-        # 題號
-        c.setFillColorRGB(0, 0, 0)
-        c.drawString(left_m, cur_y, f"{idx}. ")
-
-        # 詞語（紅色）
-        c.setFillColor(RED)
-        c.drawString(left_m + 40, cur_y, word)
-
-        # 恢復為黑色，準備下一行
-        c.setFillColorRGB(0, 0, 0)
-        cur_y -= line_h
-
-    c.save()
-    bio.seek(0)
-    return bio
-
-    # ── 詞語表（答案，紅色）────────────────────────────────
-    c.showPage()
-    cur_y = page_height - 60
-
-    c.setFont(font_name, 20)
+    # Answer key subtitle in red
+    c.setFont(font_name, 16)
+    c.setFillColor(RED)
+    c.drawString(PDF_LEFT_NUM, cur_y, "教師版答案 (Answer Key)")
     c.setFillColorRGB(0, 0, 0)
-    c.drawString(left_m, cur_y, "詞語表（題目順序）")
-    cur_y -= 40
+    cur_y -= 30
 
+    # Date (same style as student version)
+    c.setFont(font_name, PDF_FONT_SIZE)
+    c.drawString(PDF_LEFT_NUM, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
+    cur_y -= 30
+
+    # Questions with answers in red
     for idx, row in enumerate(questions):
-        word = str(row.get('Word', '')).strip()
-        if cur_y < 60:
+        content = row['Content']
+        answer  = str(row.get('Word', '')).strip()
+
+        # Proper noun marks 【】text【】 → red
+        content = re.sub(
+            r'【】(.*?)【】',
+            lambda m: f'<red>【{m.group(1)}】</red>',
+            content
+        )
+        # Fill-in blanks 【word】 → show answer in red
+        if answer:
+            content = re.sub(
+                r'【([^】]+)】',
+                f'<red>【{answer}】</red>',
+                content
+            )
+        else:
+            content = re.sub(
+                r'【([^】]+)】',
+                lambda m: f'<red>【{m.group(1)}】</red>',
+                content
+            )
+
+        if cur_y - PDF_LINE_HEIGHT < 60:
             c.showPage()
             cur_y = page_height - 60
-            c.setFont(font_name, 20)
-            c.setFillColorRGB(0, 0, 0)
-            c.drawString(left_m, cur_y, "詞語表（題目順序）（續）")
-            cur_y -= 40
 
-        c.setFont(font_name, 18)
+        c.setFont(font_name, PDF_FONT_SIZE)
         c.setFillColorRGB(0, 0, 0)
-        c.drawString(left_m, cur_y, f"{idx+1}.  ")
-        c.setFillColor(RED)
-        c.drawString(left_m + 45, cur_y, word)
-        c.setFillColorRGB(0, 0, 0)
-        cur_y -= 26
+        c.drawString(PDF_LEFT_NUM, cur_y, f"{idx+1}.")
+        cur_y = _draw_answer_line_wrapped(
+            c, PDF_TEXT_START, cur_y, content,
+            font_name, PDF_FONT_SIZE, max_width,
+            underline_offset=2, line_height=PDF_LINE_HEIGHT
+        )
 
-    c.save()
-    bio.seek(0)
-    return bio
-    # 3. 詞語表 (答案版)
-    c.showPage()
-    cur_y = page_height - 60
-    c.setFont(font_name, 20)
-    c.setFillColorRGB(0, 0, 0)
-    c.drawString(left_m, cur_y, "詞語表 (答案)")
-    cur_y -= 40
-
-    for idx, row in enumerate(questions):
-        word = str(row.get('Word', '')).strip()
-        if cur_y < 60:
-            c.showPage()
-            cur_y = page_height - 60
-        
-        c.setFont(font_name, 18)
-        c.setFillColorRGB(0, 0, 0)
-        c.drawString(left_m, cur_y, f"{idx+1}. ")
-        c.setFillColor(RED)
-        c.drawString(left_m + 40, cur_y, word)
-        cur_y -= 25
+    # Word list in red
+    words = [str(row.get('Word', '')).strip() for row in questions]
+    _draw_word_list_page(c, words, font_name, title="詞語表（答案）", word_color=RED)
 
     c.save()
     bio.seek(0)
@@ -626,7 +635,6 @@ def display_pdf_as_images(pdf_bytes):
 # --- 5. PREVIEW & DOWNLOAD INTERFACE ---
 # ============================================================
 st.divider()
-st.subheader("🚀 Finalize Documents")
 
 # ============================================================
 # MODE A: 按學校預覽下載
@@ -635,61 +643,67 @@ if send_mode == "📄 按學校預覽下載":
     schools = edited_df['School'].unique() if not edited_df.empty else []
 
     if len(schools) == 0:
-        st.info("Select at least one question above to begin.")
+        st.info("請在上方題目列表中至少勾選一題。")
     else:
-        selected_school = st.selectbox("Select School to Preview/Download", schools)
+        st.subheader("🏫 按學校下載")
+        selected_school = st.selectbox("選擇學校", schools, label_visibility="collapsed")
         school_data = edited_df[edited_df['School'] == selected_school]
-
-        col1, col2 = st.columns([1, 2])
 
         original_questions = school_data.to_dict('records')
         cache_key = f"school_{selected_school}_{selected_level}"
-        shuffled_questions = get_shuffled_questions(original_questions, cache_key)
 
-        pdf_bytes        = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions).getvalue()
-        answer_pdf_bytes = create_answer_pdf(selected_school, selected_level, shuffled_questions).getvalue()
-        docx_bytes       = create_docx(selected_school, selected_level, shuffled_questions).getvalue()
+        with st.spinner("正在生成文件…"):
+            shuffled_questions = get_shuffled_questions(original_questions, cache_key)
+            pdf_bytes        = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions).getvalue()
+            answer_pdf_bytes = create_answer_pdf(selected_school, selected_level, shuffled_questions).getvalue()
+            docx_bytes       = create_docx(selected_school, selected_level, shuffled_questions).getvalue()
 
-        with col1:
-            st.write(f"**School:** {selected_school}")
-            st.write(f"**Level:** {selected_level}")
-            st.write(f"**Questions:** {len(school_data)}")
+        # Info strip
+        info_c1, info_c2, info_c3 = st.columns(3)
+        info_c1.metric("學校", selected_school)
+        info_c2.metric("年級", selected_level)
+        info_c3.metric("題目數", len(school_data))
 
+        # Download buttons — 3 columns side by side
+        dl1, dl2, dl3 = st.columns(3)
+        with dl1:
             st.download_button(
-                label=f"📥 Download {selected_school}_{selected_level}.pdf",
+                label="📥 學生版 PDF",
                 data=pdf_bytes,
-                file_name=f"{selected_school}_{selected_level}_Review_{datetime.date.today()}.pdf",
+                file_name=f"{selected_school}_{selected_level}_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_{selected_school}_{selected_level}"
             )
+        with dl2:
             st.download_button(
-                label="📄 下載 Word 檔（可編輯）",
+                label="📄 Word 檔（可編輯）",
                 data=docx_bytes,
-                file_name=f"{selected_school}_{selected_level}_Review_{datetime.date.today()}.docx",
+                file_name=f"{selected_school}_{selected_level}_{datetime.date.today()}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"dl_docx_{selected_school}_{selected_level}"
             )
+        with dl3:
             st.download_button(
-                label="📥 下載教師版答案 PDF",
+                label="🔑 教師版答案 PDF",
                 data=answer_pdf_bytes,
-                file_name=f"{selected_school}_{selected_level}_教師版答案_{datetime.date.today()}.pdf",
+                file_name=f"{selected_school}_{selected_level}_教師版_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_answer_{selected_school}_{selected_level}"
             )
-            st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
 
-        with col2:
-            st.write("🔍 **100% Accurate Preview**")
-            display_pdf_as_images(pdf_bytes)
+        st.caption("💡 如需修改題目，請在 Google Sheet 更正後點擊側欄「更新資料」。")
+        st.divider()
+        st.subheader("🔍 學生版預覽")
+        display_pdf_as_images(pdf_bytes)
 
 # ============================================================
 # MODE B: 按學生寄送
 # ============================================================
 else:
-    st.subheader("👨‍👩‍👧 學生配對結果")
+    st.subheader("👨‍👩‍👧 按學生寄送")
 
     if student_df.empty:
         st.error("❌ 無法讀取「學生資料」工作表，請確認工作表名稱正確。")
@@ -736,7 +750,7 @@ else:
         st.stop()
 
     student_count = merged['學生編號'].nunique()
-    st.success(f"✅ 成功配對 {student_count} 位學生（按學生編號），共 {len(merged)} 筆配對資料")
+    st.success(f"✅ 成功配對 {student_count} 位學生")
 
     for student_id, group in merged.groupby('學生編號'):
         parent_email  = str(group['家長 Email'].iloc[0]).strip()
@@ -753,64 +767,67 @@ else:
             question_count = unique_group['Content'].nunique()
 
         st.divider()
-        col1, col2 = st.columns([1, 2])
+
+        # Student info strip
+        si1, si2, si3, si4 = st.columns(4)
+        si1.markdown(f"**👤 {student_name}**<br><small>{student_id}</small>", unsafe_allow_html=True)
+        si2.markdown(f"**🏫 {school_name}**<br><small>{grade}</small>", unsafe_allow_html=True)
+        si3.markdown(f"**📧 家長**<br><small>{parent_email}</small>", unsafe_allow_html=True)
+        si4.markdown(f"**📝 題目數**<br><small>{question_count} 題</small>", unsafe_allow_html=True)
 
         original_questions = unique_group.to_dict('records')
         cache_key          = f"student_{student_id}_{grade}"
-        shuffled_questions = get_shuffled_questions(original_questions, cache_key)
 
-        pdf_bytes        = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions).getvalue()
-        answer_pdf_bytes = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
-        docx_bytes       = create_docx(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
+        with st.spinner(f"正在生成 {student_name} 的文件…"):
+            shuffled_questions = get_shuffled_questions(original_questions, cache_key)
+            pdf_bytes        = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions).getvalue()
+            answer_pdf_bytes = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
+            docx_bytes       = create_docx(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
 
-        with col1:
-            st.write(f"**👤 學生：** {student_name}")
-            st.write(f"**🆔 學生編號：** {student_id}")
-            st.write(f"**🏫 學校：** {school_name} ({grade})")
-            st.write(f"**📧 家長：** {parent_email}")
-            st.write(f"**👩‍🏫 老師：** {teacher_email}")
-            st.write(f"**📝 題目數：** {question_count} 題")
-
+        # Download + Send buttons — 4 columns
+        dl1, dl2, dl3, dl4 = st.columns(4)
+        with dl1:
             st.download_button(
-                label=f"📥 下載 {student_name} PDF",
+                label="📥 學生版 PDF",
                 data=pdf_bytes,
-                file_name=f"{student_name}_{grade}_Review_{datetime.date.today()}.pdf",
+                file_name=f"{student_name}_{grade}_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_{student_id}"
             )
+        with dl2:
             st.download_button(
-                label=f"📄 下載 {student_name} Word 檔（可編輯）",
+                label="📄 Word 檔",
                 data=docx_bytes,
-                file_name=f"{student_name}_{grade}_Review_{datetime.date.today()}.docx",
+                file_name=f"{student_name}_{grade}_{datetime.date.today()}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"dl_docx_{student_id}"
             )
+        with dl3:
             st.download_button(
-                label="📥 下載教師版答案 PDF",
+                label="🔑 教師版答案",
                 data=answer_pdf_bytes,
-                file_name=f"{student_name}_{grade}_教師版答案_{datetime.date.today()}.pdf",
+                file_name=f"{student_name}_{grade}_教師版_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_answer_{student_id}"
             )
-
+        with dl4:
             if st.button(
-                f"📧 寄送給 {student_name} 家長",
+                f"📧 寄給家長",
                 key=f"send_{student_id}",
                 use_container_width=True
             ):
-                with st.spinner(f"正在寄送給 {parent_email}..."):
+                with st.spinner(f"正在寄送給 {parent_email}…"):
                     success, msg = send_email_with_pdf(
                         parent_email, student_name, school_name, grade, pdf_bytes, cc_email=teacher_email
                     )
                     if success:
-                        st.success("✅ 已成功寄送！")
+                        st.success(f"✅ 已成功寄送給 {parent_email}！")
                     else:
                         st.error(f"❌ 發送失敗: {msg}")
                         st.code(msg)
 
-        with col2:
-            st.write("🔍 **100% 準確預覽**")
+        with st.expander(f"🔍 預覽 {student_name} 的工作紙"):
             display_pdf_as_images(pdf_bytes)
