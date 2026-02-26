@@ -256,12 +256,12 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
 def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
     """
     Creates a student worksheet PDF using direct canvas drawing.
-    Blanks are rendered as underlined spaces (invisible characters with a line underneath).
+    Blanks are rendered as underlined spaces (a continuous line).
+    Right margin is correctly respected.
     Returns a BytesIO object.
     """
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
-    from reportlab.pdfbase import pdfmetrics
     import io
     import re
     import datetime
@@ -272,9 +272,16 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    left_margin = 60
-    top_margin = page_height - 60
-    cur_y = top_margin
+    # Margins (in points)
+    left_margin_num = 60          # where the question number is drawn
+    text_start_x = left_margin_num + 30   # where the question text starts
+    right_margin = 40
+    max_text_width = page_width - right_margin - text_start_x   # correct calculation
+
+    line_height = 26
+    body_font_size = 18
+
+    cur_y = page_height - 60      # start near top
 
     # ---- Title ----
     c.setFont(font_name, 22)
@@ -282,49 +289,45 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙"
     else:
         title = f"{school_name} ({level}) - 校本填充工作紙"
-    c.drawString(left_margin, cur_y, title)
+    c.drawString(left_margin_num, cur_y, title)
     cur_y -= 30
 
     # ---- Date ----
     c.setFont(font_name, 18)
     date_str = f"日期: {datetime.date.today() + datetime.timedelta(days=1)}"
-    c.drawString(left_margin, cur_y, date_str)
+    c.drawString(left_margin_num, cur_y, date_str)
     cur_y -= 30
 
     # ---- Questions ----
-    max_text_width = page_width - left_margin - 40
-    line_height = 26
-    body_font_size = 18
-
     for idx, row in enumerate(questions):
         content = row['Content']
 
         # 1. Proper noun marks: 【】text【】 -> <u>text</u>
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
 
-        # 2. Fill-in-the-blanks: 【word】 -> underlined spaces (invisible line)
+        # 2. Fill-in-the-blanks: 【word】 -> underlined spaces (continuous line)
         def replace_blank(match):
             word = match.group(1)
-            blank_length = max(len(word) * 2, 4)   # same logic as original
+            blank_length = max(len(word) * 2, 4)   # same logic as your original
             blank_spaces = ' ' * blank_length       # spaces are invisible
             return f'<u>{blank_spaces}</u>'
         content = re.sub(r'【([^】]+)】', replace_blank, content)
 
-        # (No need for zero‑width space hack – spaces at start work fine)
+        # (No need for zero‑width space hack – spaces at line start are fine)
 
-        # New page if needed
+        # New page if not enough space
         if cur_y - line_height < 60:
             c.showPage()
             cur_y = page_height - 60
 
         # Draw question number
         c.setFont(font_name, body_font_size)
-        c.drawString(left_margin, cur_y, f"{idx+1}.")
+        c.drawString(left_margin_num, cur_y, f"{idx+1}.")
 
         # Draw question content with underlines and wrapping
         cur_y = draw_text_with_underline_wrapped(
             c,
-            left_margin + 30,
+            text_start_x,
             cur_y,
             content,
             font_name,
@@ -346,21 +349,21 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         cur_y = page_height - 60
 
         c.setFont(font_name, 20)
-        c.drawString(left_margin, cur_y, "詞語表")
+        c.drawString(left_margin_num, cur_y, "詞語表")
         cur_y -= 30
 
         c.setFont(font_name, 18)
         # Two columns
         col_width = 200
-        x1 = left_margin
-        x2 = left_margin + col_width + 20
+        x1 = left_margin_num
+        x2 = left_margin_num + col_width + 20
         col_x = x1
         for i, word in enumerate(unique_words):
             if cur_y < 60:
                 c.showPage()
                 cur_y = page_height - 60
                 c.setFont(font_name, 20)
-                c.drawString(left_margin, cur_y, "詞語表 (續)")
+                c.drawString(left_margin_num, cur_y, "詞語表 (續)")
                 cur_y -= 30
                 c.setFont(font_name, 18)
             c.drawString(col_x, cur_y, f"{i+1}. {word}")
