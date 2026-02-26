@@ -262,6 +262,11 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
             content = '&#8203;' + content
     
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
+
+        # 解決 ReportLab Table 儲存格開頭底線失效的 Bug
+        if content.startswith('<u>'):
+            content = '&#8203;' + content  # 加入零寬空格
+        
         content_para = Paragraph(content, normal_style)
     
         t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
