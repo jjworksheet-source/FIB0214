@@ -421,9 +421,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 # ============================================================
 def create_answer_pdf(school_name, level, questions, student_name=None):
     """
-    教師版：
-    - 第一頁：題目原文（不做任何替換，保持原樣）
-    - 最後一頁：詞語表（題目順序，紅色顯示答案）
+    教師版：只輸出「詞語表（題目順序）」，
+    依題目順序列出所有 Word，紅色顯示。
     """
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.colors import red as RED
@@ -431,40 +430,49 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     bio = io.BytesIO()
     c = rl_canvas.Canvas(bio, pagesize=letter)
     page_width, page_height = letter
-    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+    font_name = CHINESE_FONT if CHINESE_FONT else "Helvetica"
 
-    left_m = 60
-    text_x = left_m + 30
-    max_w  = page_width - 40 - text_x
-    line_h = 26
-    cur_y  = page_height - 60
+    left_m   = 60
+    line_h   = 26
+    cur_y    = page_height - 80
 
-    # ── 標題 ──────────────────────────────────────────────
+    # 標題：詞語清單（題目順序）
     c.setFont(font_name, 22)
     c.setFillColorRGB(0, 0, 0)
-    title = f"{school_name} ({level}) - {student_name} - 教師版答案" if student_name \
-            else f"{school_name} ({level}) - 教師版答案"
+    title = "詞語清單（題目順序）"
     c.drawString(left_m, cur_y, title)
     cur_y -= 40
 
-    # ── 題目（原文，不替換任何內容）────────────────────────
-    for idx, row in enumerate(questions):
-        if cur_y < 80:
+    c.setFont(font_name, 18)
+
+    for idx, row in enumerate(questions, start=1):
+        word = str(row.get("Word", "")).strip()
+
+        # 換頁檢查
+        if cur_y < 60:
             c.showPage()
-            cur_y = page_height - 60
+            cur_y = page_height - 80
+            c.setFont(font_name, 22)
+            c.setFillColorRGB(0, 0, 0)
+            c.drawString(left_m, cur_y, "詞語清單（題目順序）（續）")
+            cur_y -= 40
+            c.setFont(font_name, 18)
 
-        # 清理 Content：移除所有 【...】 標記，只留純文字
-        content = str(row.get('Content', ''))
-        content_clean = re.sub(r'【】(.*?)【】', r'\1', content)  # 專有名詞標記 → 保留文字
-        content_clean = re.sub(r'【[^】]*】', '＿＿', content_clean)  # 答案空格 → 底線
-
-        c.setFont(font_name, 18)
+        # 題號
         c.setFillColorRGB(0, 0, 0)
-        c.drawString(left_m, cur_y, f"{idx+1}.")
+        c.drawString(left_m, cur_y, f"{idx}. ")
 
-        # 簡單繪製（不換行，如需換行可用 draw_text_with_underline_wrapped）
-        c.drawString(text_x, cur_y, content_clean[:60])  # 截斷防止溢出
+        # 詞語（紅色）
+        c.setFillColor(RED)
+        c.drawString(left_m + 40, cur_y, word)
+
+        # 恢復為黑色，準備下一行
+        c.setFillColorRGB(0, 0, 0)
         cur_y -= line_h
+
+    c.save()
+    bio.seek(0)
+    return bio
 
     # ── 詞語表（答案，紅色）────────────────────────────────
     c.showPage()
