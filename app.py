@@ -20,20 +20,15 @@ from python_http_client.exceptions import HTTPError
 # --- 1. SETUP & CONNECTION ---
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
 st.title("📝 Worksheet Generator")
-# --- Initialize session state for shuffled questions ---
+
 if 'shuffled_cache' not in st.session_state:
     st.session_state.shuffled_cache = {}
 
-# Try to import reportlab and handle font registration
+# --- ReportLab Import & Font Registration ---
 try:
     from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
-    from reportlab.lib import colors
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.enums import TA_CENTER
 
     font_paths = [
         "Kai.ttf",
@@ -59,7 +54,7 @@ except ImportError:
     st.error("❌ reportlab not found. Please add 'reportlab' to your requirements.txt")
     st.stop()
 
-# --- CONNECT TO GOOGLE CLOUD ---
+# --- Connect to Google Cloud ---
 try:
     key_dict = st.secrets["gcp_service_account"]
     creds = Credentials.from_service_account_info(
@@ -127,27 +122,23 @@ df.columns = [c.strip() for c in df.columns]
 level_col = "Level" if "Level" in df.columns else "level"
 df = df.rename(columns={level_col: "Level"})
 
-# Clean student_df column names
 if not student_df.empty:
     student_df.columns = [c.strip() for c in student_df.columns]
     for col in student_df.columns:
         if student_df[col].dtype == object:
             student_df[col] = student_df[col].astype(str).str.strip()
 
-# Clean standby df
 for col in df.columns:
     if df[col].dtype == object:
         df[col] = df[col].astype(str).str.strip()
 
-# --- Sidebar: Level Filter ---
+# --- Sidebar ---
 with st.sidebar:
     st.header("🎓 篩選年級")
     available_levels = sorted(df["Level"].astype(str).str.strip().unique().tolist())
     selected_level = st.radio("選擇年級", available_levels, index=0)
     st.divider()
     st.info(f"目前顯示：**{selected_level}** 的題目")
-
-    # --- Sidebar: Mode Toggle ---
     st.divider()
     st.header("📬 發送模式")
     send_mode = st.radio(
@@ -163,7 +154,6 @@ status_norm = (
     .str.replace("\u3000", " ", regex=False)
     .str.strip()
 )
-
 level_norm = df["Level"].astype(str).str.strip()
 ready_df = df[status_norm.isin(["Ready", "Waiting"]) & (level_norm == selected_level)]
 
@@ -180,7 +170,7 @@ edited_df = st.data_editor(
     hide_index=True
 )
 
-# --- HELPER: Shuffle questions once for consistency across all documents ---
+# --- HELPER: Shuffle questions once per session ---
 def get_shuffled_questions(questions, cache_key):
     if cache_key in st.session_state.shuffled_cache:
         return st.session_state.shuffled_cache[cache_key]
@@ -190,287 +180,334 @@ def get_shuffled_questions(questions, cache_key):
     st.session_state.shuffled_cache[cache_key] = questions_list
     return questions_list
 
-# --- 4. GENERATE PDF FUNCTION (Student Version) ---
-def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_width, underline_offset=2, line_height=18):
-    """
-    Draws text with <u>underline</u> tags, wrapping lines automatically.
-    Returns the new y position after drawing.
-    """
-    import re
-    from reportlab.pdfbase import pdfmetrics
+# ============================================================
+# --- PDF LAYOUT CONSTANTS (shared by both PDF functions) ---
+# ============================================================
+PDF_LEFT_NUM    = 60
+PDF_TEXT_START  = PDF_LEFT_NUM + 30
+PDF_RIGHT_MARGIN = 40
+PDF_LINE_HEIGHT  = 26
+PDF_FONT_SIZE    = 18
 
-    # Split text into normal parts and underlined parts
+def _get_max_width():
+    page_width, _ = letter
+    return page_width - PDF_RIGHT_MARGIN - PDF_TEXT_START
+
+# ============================================================
+# --- SHARED HELPER: draw text with <u> underline tags ---
+# ============================================================
+def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_width,
+                                      underline_offset=2, line_height=18):
+    """
+    Draws text supporting <u>...</u> underline tags with automatic line wrapping.
+    Returns new y position.
+    """
     parts = re.split(r'(<u>.*?</u>)', text)
     tokens = []
     for p in parts:
         if not p:
             continue
         if p.startswith("<u>") and p.endswith("</u>"):
-            tokens.append(p)          # keep underlined part as one token
+            tokens.append(p)
         else:
-            # split normal text into individual characters (so we can wrap anywhere)
             tokens.extend(list(p))
 
     def measure(tok):
-        if tok.startswith("<u>") and tok.endswith("</u>"):
-            inner = tok[3:-4]
-            return pdfmetrics.stringWidth(inner, font_name, font_size)
-        else:
-            return pdfmetrics.stringWidth(tok, font_name, font_size)
+        inner = tok[3:-4] if tok.startswith("<u>") else tok
+        return pdfmetrics.stringWidth(inner, font_name, font_size)
 
-    def draw_line(parts_to_draw, draw_x, draw_y):
+    def draw_line(line_tokens, draw_x, draw_y):
         cx = draw_x
-        for tp in parts_to_draw:
+        for tp in line_tokens:
+            c.setFont(font_name, font_size)
             if tp.startswith("<u>") and tp.endswith("</u>"):
                 inner = tp[3:-4]
-                c.setFont(font_name, font_size)
                 c.drawString(cx, draw_y, inner)
                 w = pdfmetrics.stringWidth(inner, font_name, font_size)
                 c.line(cx, draw_y - underline_offset, cx + w, draw_y - underline_offset)
                 cx += w
             else:
-                c.setFont(font_name, font_size)
                 c.drawString(cx, draw_y, tp)
                 cx += pdfmetrics.stringWidth(tp, font_name, font_size)
 
     cur_y = y
-    line_buf = []
-    line_width = 0
+    line_buf, line_width = [], 0
     for tok in tokens:
         tok_w = measure(tok)
         if line_width + tok_w > max_width and line_buf:
             draw_line(line_buf, x, cur_y)
             cur_y -= line_height
-            line_buf = [tok]
-            line_width = tok_w
+            line_buf, line_width = [tok], tok_w
         else:
             line_buf.append(tok)
             line_width += tok_w
     if line_buf:
         draw_line(line_buf, x, cur_y)
         cur_y -= line_height
-
-    # add a small gap after the paragraph
     cur_y -= 12
     return cur_y
+
+# ============================================================
+# --- SHARED HELPER: draw text with <red> colour tags ---
+# ============================================================
+def _draw_answer_line_wrapped(c, x, y, text, font_name, font_size, max_width,
+                               underline_offset=2, line_height=18):
+    """
+    Draws text supporting <red>...</red> colour tags with automatic line wrapping.
+    Returns new y position.
+    """
+    from reportlab.lib.colors import red as RED
+
+    parts = re.split(r'(<red>.*?</red>)', text)
+    tokens = []
+    for p in parts:
+        if not p:
+            continue
+        if p.startswith('<red>') and p.endswith('</red>'):
+            tokens.append(p)
+        else:
+            tokens.extend(list(p))
+
+    def measure(tok):
+        inner = tok[5:-6] if tok.startswith('<red>') else tok
+        return pdfmetrics.stringWidth(inner, font_name, font_size)
+
+    def draw_line(line_tokens, draw_x, draw_y):
+        cx = draw_x
+        for tp in line_tokens:
+            c.setFont(font_name, font_size)
+            if tp.startswith('<red>') and tp.endswith('</red>'):
+                inner = tp[5:-6]
+                c.setFillColor(RED)
+                c.drawString(cx, draw_y, inner)
+                c.setFillColorRGB(0, 0, 0)
+                cx += pdfmetrics.stringWidth(inner, font_name, font_size)
+            else:
+                c.setFillColorRGB(0, 0, 0)
+                c.drawString(cx, draw_y, tp)
+                cx += pdfmetrics.stringWidth(tp, font_name, font_size)
+
+    cur_y = y
+    line_buf, line_width = [], 0
+    for tok in tokens:
+        tok_w = measure(tok)
+        if line_width + tok_w > max_width and line_buf:
+            draw_line(line_buf, x, cur_y)
+            cur_y -= line_height
+            line_buf, line_width = [tok], tok_w
+        else:
+            line_buf.append(tok)
+            line_width += tok_w
+    if line_buf:
+        draw_line(line_buf, x, cur_y)
+        cur_y -= line_height
+    cur_y -= 12
+    return cur_y
+
+# ============================================================
+# --- SHARED HELPER: draw word list page ---
+# ============================================================
+def _draw_word_list_page(c, words, font_name, title="詞語表", word_color=None):
+    """
+    Draws a word list on a new page in two columns.
+    word_color: reportlab color object or None (black).
+    """
+    from reportlab.lib.colors import red as RED
+    _, page_height = letter
+
+    unique_words = list(dict.fromkeys([w for w in words if w]))
+    if not unique_words:
+        return
+
+    c.showPage()
+    cur_y = page_height - 60
+    col_width = 200
+    x1 = PDF_LEFT_NUM
+    x2 = PDF_LEFT_NUM + col_width + 20
+    col_x = x1
+
+    c.setFont(font_name, 20)
+    c.setFillColorRGB(0, 0, 0)
+    c.drawString(PDF_LEFT_NUM, cur_y, title)
+    cur_y -= 30
+
+    for i, word in enumerate(unique_words):
+        if cur_y < 60:
+            c.showPage()
+            cur_y = page_height - 60
+            c.setFont(font_name, 20)
+            c.setFillColorRGB(0, 0, 0)
+            c.drawString(PDF_LEFT_NUM, cur_y, f"{title} (續)")
+            cur_y -= 30
+
+        c.setFont(font_name, PDF_FONT_SIZE)
+        if word_color:
+            c.setFillColor(word_color)
+        else:
+            c.setFillColorRGB(0, 0, 0)
+        c.drawString(col_x, cur_y, f"{i+1}. {word}")
+        c.setFillColorRGB(0, 0, 0)
+
+        if (i + 1) % 2 == 0:
+            cur_y -= 30
+            col_x = x1
+        else:
+            col_x = x2
+
+# ============================================================
+# --- 4a. STUDENT WORKSHEET PDF ---
+# ============================================================
 def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
     """
-    Creates a student worksheet PDF using direct canvas drawing.
-    Blanks are rendered as underlined spaces (a continuous line).
-    Right margin is correctly respected.
-    Returns a BytesIO object.
+    Student worksheet: blanks shown as underlined spaces.
+    Word list appended at the end.
     """
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import letter
-    import io
-    import re
-    import datetime
+    from reportlab.pdfgen import canvas as rl_canvas
 
     bio = io.BytesIO()
-    c = canvas.Canvas(bio, pagesize=letter)
-    page_width, page_height = letter
-
+    c = rl_canvas.Canvas(bio, pagesize=letter)
+    _, page_height = letter
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+    max_width = _get_max_width()
 
-    # Margins (in points)
-    left_margin_num = 60          # where the question number is drawn
-    text_start_x = left_margin_num + 30   # where the question text starts
-    right_margin = 40
-    max_text_width = page_width - right_margin - text_start_x   # correct calculation
+    cur_y = page_height - 60
 
-    line_height = 26
-    body_font_size = 18
-
-    cur_y = page_height - 60      # start near top
-
-    # ---- Title ----
+    # Title
     c.setFont(font_name, 22)
-    if student_name:
-        title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙"
-    else:
-        title = f"{school_name} ({level}) - 校本填充工作紙"
-    c.drawString(left_margin_num, cur_y, title)
+    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
+            else f"{school_name} ({level}) - 校本填充工作紙"
+    c.drawString(PDF_LEFT_NUM, cur_y, title)
     cur_y -= 30
 
-    # ---- Date ----
-    c.setFont(font_name, 18)
-    date_str = f"日期: {datetime.date.today() + datetime.timedelta(days=1)}"
-    c.drawString(left_margin_num, cur_y, date_str)
+    # Date
+    c.setFont(font_name, PDF_FONT_SIZE)
+    c.drawString(PDF_LEFT_NUM, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
     cur_y -= 30
 
-    # ---- Questions ----
+    # Questions
+    def replace_blank(match):
+        word = match.group(1)
+        blank_spaces = ' ' * max(len(word) * 2, 4)
+        return f'<u>{blank_spaces}</u>'
+
     for idx, row in enumerate(questions):
         content = row['Content']
-
-        # 1. Proper noun marks: 【】text【】 -> <u>text</u>
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
-
-        # 2. Fill-in-the-blanks: 【word】 -> underlined spaces (continuous line)
-        def replace_blank(match):
-            word = match.group(1)
-            blank_length = max(len(word) * 2, 4)   # same logic as your original
-            blank_spaces = ' ' * blank_length       # spaces are invisible
-            return f'<u>{blank_spaces}</u>'
         content = re.sub(r'【([^】]+)】', replace_blank, content)
 
-        # (No need for zero‑width space hack – spaces at line start are fine)
-
-        # New page if not enough space
-        if cur_y - line_height < 60:
+        if cur_y - PDF_LINE_HEIGHT < 60:
             c.showPage()
             cur_y = page_height - 60
 
-        # Draw question number
-        c.setFont(font_name, body_font_size)
-        c.drawString(left_margin_num, cur_y, f"{idx+1}.")
-
-        # Draw question content with underlines and wrapping
+        c.setFont(font_name, PDF_FONT_SIZE)
+        c.drawString(PDF_LEFT_NUM, cur_y, f"{idx+1}.")
         cur_y = draw_text_with_underline_wrapped(
-            c,
-            text_start_x,
-            cur_y,
-            content,
-            font_name,
-            body_font_size,
-            max_text_width,
-            underline_offset=2,
-            line_height=line_height
+            c, PDF_TEXT_START, cur_y, content,
+            font_name, PDF_FONT_SIZE, max_width,
+            underline_offset=2, line_height=PDF_LINE_HEIGHT
         )
 
-    # ---- Word list page ----
-    if original_questions is not None:
-        words = [row.get('Word', '').strip() for row in original_questions]
-    else:
-        words = [row.get('Word', '').strip() for row in questions]
-    unique_words = list(dict.fromkeys([w for w in words if w]))
-
-    if unique_words:
-        c.showPage()
-        cur_y = page_height - 60
-
-        c.setFont(font_name, 20)
-        c.drawString(left_margin_num, cur_y, "詞語表")
-        cur_y -= 30
-
-        c.setFont(font_name, 18)
-        # Two columns
-        col_width = 200
-        x1 = left_margin_num
-        x2 = left_margin_num + col_width + 20
-        col_x = x1
-        for i, word in enumerate(unique_words):
-            if cur_y < 60:
-                c.showPage()
-                cur_y = page_height - 60
-                c.setFont(font_name, 20)
-                c.drawString(left_margin_num, cur_y, "詞語表 (續)")
-                cur_y -= 30
-                c.setFont(font_name, 18)
-            c.drawString(col_x, cur_y, f"{i+1}. {word}")
-            # alternate columns
-            if (i+1) % 2 == 0:
-                cur_y -= 30
-                col_x = x1
-            else:
-                col_x = x2
+    # Word list (use original_questions order if provided)
+    source = original_questions if original_questions is not None else questions
+    words = [str(row.get('Word', '')).strip() for row in source]
+    _draw_word_list_page(c, words, font_name, title="詞語表")
 
     c.save()
     bio.seek(0)
     return bio
 
-# --- FEATURE 2: Teacher Answer PDF Function ---
+# ============================================================
+# --- 4b. TEACHER ANSWER PDF ---
+# ============================================================
 def create_answer_pdf(school_name, level, questions, student_name=None):
-    from reportlab.lib.colors import blue, red
+    """
+    Teacher answer sheet: answers shown in red 【brackets】.
+    Same layout, margins, font size as student version.
+    Word list appended at the end (words in red).
+    """
+    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.lib.colors import red as RED
 
     bio = io.BytesIO()
-    doc = SimpleDocTemplate(bio, pagesize=letter)
-    story = []
-
-    styles = getSampleStyleSheet()
+    c = rl_canvas.Canvas(bio, pagesize=letter)
+    _, page_height = letter
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+    max_width = _get_max_width()
 
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontName=font_name,
-        fontSize=22,
-        alignment=TA_CENTER,
-        spaceAfter=12
-    )
-    subtitle_style = ParagraphStyle(
-        'CustomSubtitle',
-        parent=styles['Heading2'],
-        fontName=font_name,
-        fontSize=16,
-        alignment=TA_CENTER,
-        textColor=red,
-        spaceAfter=12
-    )
-    normal_style = ParagraphStyle(
-        'CustomNormal',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=18,
-        leading=26,
-        leftIndent=0,
-        firstLineIndent=0
-    )
+    cur_y = page_height - 60
 
-    if student_name:
-        title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>"
-    else:
-        title_text = f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
+    # Title (same style as student version)
+    c.setFont(font_name, 22)
+    c.setFillColorRGB(0, 0, 0)
+    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
+            else f"{school_name} ({level}) - 校本填充工作紙"
+    c.drawString(PDF_LEFT_NUM, cur_y, title)
+    cur_y -= 30
 
-    story.append(Paragraph(title_text, title_style))
-    story.append(Paragraph("<b>教師版答案 (Answer Key)</b>", subtitle_style))
-    story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
-    story.append(Spacer(1, 0.3*inch))
+    # Answer key subtitle in red
+    c.setFont(font_name, 16)
+    c.setFillColor(RED)
+    c.drawString(PDF_LEFT_NUM, cur_y, "教師版答案 (Answer Key)")
+    c.setFillColorRGB(0, 0, 0)
+    cur_y -= 30
 
-    for i, row in enumerate(questions):
+    # Date (same style as student version)
+    c.setFont(font_name, PDF_FONT_SIZE)
+    c.drawString(PDF_LEFT_NUM, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
+    cur_y -= 30
+
+    # Questions with answers in red
+    for idx, row in enumerate(questions):
         content = row['Content']
-        answer = row.get('Word', '')
+        answer  = str(row.get('Word', '')).strip()
 
+        # Proper noun marks 【】text【】 → red
+        content = re.sub(
+            r'【】(.*?)【】',
+            lambda m: f'<red>【{m.group(1)}】</red>',
+            content
+        )
+        # Fill-in blanks 【word】 → show answer in red
         if answer:
-            answer_html = f'<font color="red"><b>【{answer}】</b></font>'
-            # Replace underscores with answer
-            content = re.sub(r'_{2,}|＿{2,}', answer_html, content)
-            # Handle 【】text【】 proper noun marks
-            content = re.sub(r'【】(.*?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-            # Handle 【answer】 blanks — fixed: added capture group ()
-            content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(
+                r'【([^】]+)】',
+                f'<red>【{answer}】</red>',
+                content
+            )
         else:
-            # No Word answer - handle bracket patterns only
-            content = re.sub(r'【】(.*?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-            # Fixed: added capture group ()
-            content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(
+                r'【([^】]+)】',
+                lambda m: f'<red>【{m.group(1)}】</red>',
+                content
+            )
 
-        # 解決開頭紅字標籤失效問題
-        if content.strip().startswith('<font'):
-            content = '&#8203;' + content
+        if cur_y - PDF_LINE_HEIGHT < 60:
+            c.showPage()
+            cur_y = page_height - 60
 
-        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
-        content_para = Paragraph(content, normal_style)
+        c.setFont(font_name, PDF_FONT_SIZE)
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(PDF_LEFT_NUM, cur_y, f"{idx+1}.")
+        cur_y = _draw_answer_line_wrapped(
+            c, PDF_TEXT_START, cur_y, content,
+            font_name, PDF_FONT_SIZE, max_width,
+            underline_offset=2, line_height=PDF_LINE_HEIGHT
+        )
 
-        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
-        t.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 0.15*inch))
+    # Word list in red
+    words = [str(row.get('Word', '')).strip() for row in questions]
+    _draw_word_list_page(c, words, font_name, title="詞語表（答案）", word_color=RED)
 
-    doc.build(story)
+    c.save()
     bio.seek(0)
     return bio
 
-# --- SendGrid Email Function ---
+# ============================================================
+# --- SendGrid Email ---
+# ============================================================
 def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
     try:
         sg_config = st.secrets["sendgrid"]
-
         recipient = str(to_email).strip()
         if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
             return False, f"無效的家長電郵格式: '{recipient}'"
@@ -520,13 +557,13 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
     except Exception as e:
         return False, str(e)
 
+# ============================================================
+# --- DOCX Export ---
+# ============================================================
 def create_docx(school_name, level, questions, student_name=None):
     doc = Document()
-
-    if student_name:
-        title_text = f"{school_name} ({level}) - {student_name} - 校本填充工作紙"
-    else:
-        title_text = f"{school_name} ({level}) - 校本填充工作紙"
+    title_text = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
+                 else f"{school_name} ({level}) - 校本填充工作紙"
 
     title = doc.add_heading(title_text, level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -536,10 +573,9 @@ def create_docx(school_name, level, questions, student_name=None):
     doc.add_paragraph("")
 
     for i, row in enumerate(questions):
-        content = row['Content']
-        content_clean = re.sub(r'【|】', '', content)
+        content = re.sub(r'【|】', '', row['Content'])
         p = doc.add_paragraph(style='List Number')
-        run = p.add_run(f"{content_clean}")
+        run = p.add_run(content)
         run.font.size = Pt(18)
 
     bio = io.BytesIO()
@@ -547,7 +583,9 @@ def create_docx(school_name, level, questions, student_name=None):
     bio.seek(0)
     return bio
 
-# --- Helper: Render PDF pages as images ---
+# ============================================================
+# --- Helper: Render PDF as images for preview ---
+# ============================================================
 def display_pdf_as_images(pdf_bytes):
     try:
         images = convert_from_bytes(pdf_bytes, dpi=150)
@@ -557,7 +595,9 @@ def display_pdf_as_images(pdf_bytes):
         st.error(f"Could not render preview: {e}")
         st.info("You can still download the PDF using the button on the left.")
 
+# ============================================================
 # --- 5. PREVIEW & DOWNLOAD INTERFACE ---
+# ============================================================
 st.divider()
 st.subheader("🚀 Finalize Documents")
 
@@ -579,14 +619,9 @@ if send_mode == "📄 按學校預覽下載":
         cache_key = f"school_{selected_school}_{selected_level}"
         shuffled_questions = get_shuffled_questions(original_questions, cache_key)
 
-        pdf_buffer = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions)
-        pdf_bytes = pdf_buffer.getvalue()
-
-        answer_pdf_buffer = create_answer_pdf(selected_school, selected_level, shuffled_questions)
-        answer_pdf_bytes = answer_pdf_buffer.getvalue()
-
-        docx_buffer = create_docx(selected_school, selected_level, shuffled_questions)
-        docx_bytes = docx_buffer.getvalue()
+        pdf_bytes        = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions).getvalue()
+        answer_pdf_bytes = create_answer_pdf(selected_school, selected_level, shuffled_questions).getvalue()
+        docx_bytes       = create_docx(selected_school, selected_level, shuffled_questions).getvalue()
 
         with col1:
             st.write(f"**School:** {selected_school}")
@@ -601,25 +636,22 @@ if send_mode == "📄 按學校預覽下載":
                 use_container_width=True,
                 key=f"dl_{selected_school}_{selected_level}"
             )
-
             st.download_button(
-                label=f"📄 下載 Word 檔（可編輯）",
+                label="📄 下載 Word 檔（可編輯）",
                 data=docx_bytes,
                 file_name=f"{selected_school}_{selected_level}_Review_{datetime.date.today()}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"dl_docx_{selected_school}_{selected_level}"
             )
-
             st.download_button(
-                label=f"📥 下載教師版答案 PDF",
+                label="📥 下載教師版答案 PDF",
                 data=answer_pdf_bytes,
                 file_name=f"{selected_school}_{selected_level}_教師版答案_{datetime.date.today()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
                 key=f"dl_answer_{selected_school}_{selected_level}"
             )
-
             st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
 
         with col2:
@@ -644,7 +676,6 @@ else:
         st.stop()
 
     active_students = student_df[student_df['狀態'] == 'Y']
-
     if active_students.empty:
         st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。請先將測試學生的狀態改為 Y。")
         st.stop()
@@ -670,7 +701,6 @@ else:
         st.write("1. `standby` 表有 Status = Ready/Waiting 的題目")
         st.write("2. `學生資料` 表有 狀態 = Y 的學生")
         st.write("3. 學校名稱和年級在兩張表中**完全一致**（注意空格/全半形）")
-
         with st.expander("🔍 查看配對資料（協助排查問題）"):
             st.write("**standby 的 School 值：**", edited_df['School'].unique().tolist())
             st.write("**standby 的 Level 值：**", edited_df['Level'].unique().tolist())
@@ -682,34 +712,29 @@ else:
     st.success(f"✅ 成功配對 {student_count} 位學生（按學生編號），共 {len(merged)} 筆配對資料")
 
     for student_id, group in merged.groupby('學生編號'):
-        parent_email = str(group['家長 Email'].iloc[0]).strip()
+        parent_email  = str(group['家長 Email'].iloc[0]).strip()
         student_name  = group['學生姓名'].iloc[0]
         school_name   = group['學校'].iloc[0]
         grade         = group['年級'].iloc[0]
         teacher_email = group['老師 Email'].iloc[0] if '老師 Email' in group.columns else "N/A"
 
         if 'ID' in group.columns:
-            unique_group = group.drop_duplicates(subset=['ID'])
+            unique_group   = group.drop_duplicates(subset=['ID'])
             question_count = unique_group['ID'].nunique()
         else:
-            unique_group = group.drop_duplicates(subset=['Content'])
+            unique_group   = group.drop_duplicates(subset=['Content'])
             question_count = unique_group['Content'].nunique()
 
         st.divider()
         col1, col2 = st.columns([1, 2])
 
         original_questions = unique_group.to_dict('records')
-        cache_key = f"student_{student_id}_{grade}"
+        cache_key          = f"student_{student_id}_{grade}"
         shuffled_questions = get_shuffled_questions(original_questions, cache_key)
 
-        pdf_buffer = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions)
-        pdf_bytes  = pdf_buffer.getvalue()
-
-        answer_pdf_buffer = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name)
-        answer_pdf_bytes = answer_pdf_buffer.getvalue()
-
-        docx_buffer = create_docx(school_name, grade, shuffled_questions, student_name=student_name)
-        docx_bytes  = docx_buffer.getvalue()
+        pdf_bytes        = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions).getvalue()
+        answer_pdf_bytes = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
+        docx_bytes       = create_docx(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
 
         with col1:
             st.write(f"**👤 學生：** {student_name}")
@@ -735,9 +760,8 @@ else:
                 use_container_width=True,
                 key=f"dl_docx_{student_id}"
             )
-
             st.download_button(
-                label=f"📥 下載教師版答案 PDF",
+                label="📥 下載教師版答案 PDF",
                 data=answer_pdf_bytes,
                 file_name=f"{student_name}_{grade}_教師版答案_{datetime.date.today()}.pdf",
                 mime="application/pdf",
