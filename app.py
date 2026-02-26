@@ -257,7 +257,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     """
     Creates a student worksheet PDF using direct canvas drawing.
     Blanks are rendered as underlined spaces (a continuous line).
-    Right margin is correctly respected.
+    Follows the logic of the original working code: proper nouns from 【】text【】,
+    then replace the word with a blank if found, otherwise append.
     Returns a BytesIO object.
     """
     from reportlab.pdfgen import canvas
@@ -272,18 +273,17 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    # Margins (in points)
-    left_margin_num = 60          # where the question number is drawn
-    text_start_x = left_margin_num + 30   # where the question text starts
+    left_margin_num = 60
+    text_start_x = left_margin_num + 30
     right_margin = 40
-    max_text_width = page_width - right_margin - text_start_x   # correct calculation
+    max_text_width = page_width - right_margin - text_start_x
 
     line_height = 26
     body_font_size = 18
 
-    cur_y = page_height - 60      # start near top
+    cur_y = page_height - 60
 
-    # ---- Title ----
+    # Title
     c.setFont(font_name, 22)
     if student_name:
         title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙"
@@ -292,30 +292,33 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     c.drawString(left_margin_num, cur_y, title)
     cur_y -= 30
 
-    # ---- Date ----
+    # Date
     c.setFont(font_name, 18)
     date_str = f"日期: {datetime.date.today() + datetime.timedelta(days=1)}"
     c.drawString(left_margin_num, cur_y, date_str)
     cur_y -= 30
 
-    # ---- Questions ----
+    # Questions
     for idx, row in enumerate(questions):
         content = row['Content']
+        word = row.get('Word', '').strip()
 
-        # 1. Proper noun marks: 【】text【】 -> <u>text</u>
+        # Step 1: Proper noun marks
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
 
-        # 2. Fill-in-the-blanks: 【word】 -> underlined spaces (continuous line)
-        def replace_blank(match):
-            word = match.group(1)
-            blank_length = max(len(word) * 2, 4)   # same logic as your original
-            blank_spaces = ' ' * blank_length       # spaces are invisible
-            return f'<u>{blank_spaces}</u>'
-        content = re.sub(r'【([^】]+)】', replace_blank, content)
+        # Step 2: Handle blank
+        if word:
+            blank_length = max(len(word) * 2, 4)
+            blank_token = f'<u>{" " * blank_length}</u>'
+            # Try to replace the word in the content (first occurrence)
+            if word in content:
+                content = content.replace(word, blank_token, 1)
+            else:
+                # Append at the end with a space
+                content = content + ' ' + blank_token
+        # (If no word, no blank is added)
 
-        # (No need for zero‑width space hack – spaces at line start are fine)
-
-        # New page if not enough space
+        # New page if needed
         if cur_y - line_height < 60:
             c.showPage()
             cur_y = page_height - 60
@@ -337,7 +340,7 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
             line_height=line_height
         )
 
-    # ---- Word list page ----
+    # Word list page
     if original_questions is not None:
         words = [row.get('Word', '').strip() for row in original_questions]
     else:
@@ -353,7 +356,6 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         cur_y -= 30
 
         c.setFont(font_name, 18)
-        # Two columns
         col_width = 200
         x1 = left_margin_num
         x2 = left_margin_num + col_width + 20
@@ -367,7 +369,6 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
                 cur_y -= 30
                 c.setFont(font_name, 18)
             c.drawString(col_x, cur_y, f"{i+1}. {word}")
-            # alternate columns
             if (i+1) % 2 == 0:
                 cur_y -= 30
                 col_x = x1
