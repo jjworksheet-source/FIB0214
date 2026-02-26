@@ -312,7 +312,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 
         # If the paragraph starts with an underline, add a zero‑width space to avoid a rendering bug
         if content.strip().startswith('<u>'):
-            content = '&#8203;' + content
+            if content.strip().startswith('<u>'):
+                content = '\u200B' + content   # zero‑width space character
 
         # Check if we need a new page
         if cur_y - line_height < 60:
