@@ -1,4 +1,4 @@
-import streamlit as st
+can you modify for me:import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
@@ -257,15 +257,11 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
         # 2. 再處理填充題
         content = re.sub(r'【[^】]+】', r'<u>________</u>', content)
-        # 3. 解決開頭底線失效問題
-        if content.startswith('<u>'):
+        # 3. 解決開頭底線失效問題（只做一次）
+        if content.strip().startswith('<u>'):
             content = '&#8203;' + content
-    
-        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
 
-        # 解決 ReportLab Table 儲存格開頭底線失效的 Bug
-        if content.startswith('<u>'):
-            content = '&#8203;' + content  # 加入零寬空格
+        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
         
         content_para = Paragraph(content, normal_style)
     
@@ -399,11 +395,15 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
             
             # Pattern: 【】text【】 (empty brackets surrounding text - keep original behavior)
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-            content = re.sub(r'【[^】]+】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
         else:
             # No Word answer - try bracket patterns only
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
-            content = re.sub(r'【[^】]+】', r'<font color="red"><b>【\1】</b></font>', content)
+            content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
+        
+        # 解決開頭紅字標籤失效問題
+        if content.strip().startswith('<font'):
+            content = '&#8203;' + content
         
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
         content_para = Paragraph(content, normal_style)
