@@ -256,6 +256,7 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
 def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
     """
     Creates a student worksheet PDF using direct canvas drawing.
+    Blanks are rendered as underlined spaces (invisible characters with a line underneath).
     Returns a BytesIO object.
     """
     from reportlab.pdfgen import canvas
@@ -301,17 +302,15 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         # 1. Proper noun marks: 【】text【】 -> <u>text</u>
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
 
-        # 2. Fill-in-the-blanks: 【word】 -> underlined blank of appropriate length (fullwidth underscores)
+        # 2. Fill-in-the-blanks: 【word】 -> underlined spaces (invisible line)
         def replace_blank(match):
             word = match.group(1)
-            blank_length = max(len(word) * 2, 4)          # same logic as original
-            blank = '＿' * blank_length                    # fullwidth underscore
-            return f'<u>{blank}</u>'
+            blank_length = max(len(word) * 2, 4)   # same logic as original
+            blank_spaces = ' ' * blank_length       # spaces are invisible
+            return f'<u>{blank_spaces}</u>'
         content = re.sub(r'【([^】]+)】', replace_blank, content)
 
-        # 3. Fix for underlines at start of paragraph (zero‑width space)
-        if content.strip().startswith('<u>'):
-            content = '\u200B' + content                   # actual zero‑width space, not HTML entity
+        # (No need for zero‑width space hack – spaces at start work fine)
 
         # New page if needed
         if cur_y - line_height < 60:
