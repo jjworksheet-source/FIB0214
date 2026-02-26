@@ -256,7 +256,7 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
 def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
     """
     Creates a student worksheet PDF using direct canvas drawing.
-    Returns a BytesIO object (same as before).
+    Returns a BytesIO object.
     """
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
@@ -269,10 +269,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     c = canvas.Canvas(bio, pagesize=letter)
     page_width, page_height = letter
 
-    # Use your registered Chinese font
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    # Margins and starting position
     left_margin = 60
     top_margin = page_height - 60
     cur_y = top_margin
@@ -293,42 +291,41 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     cur_y -= 30
 
     # ---- Questions ----
-    max_text_width = page_width - left_margin - 40  # right margin 40
+    max_text_width = page_width - left_margin - 40
     line_height = 26
     body_font_size = 18
 
     for idx, row in enumerate(questions):
         content = row['Content']
 
-        # 1. Handle proper noun marks: 【】text【】  -> <u>text</u>
+        # 1. Proper noun marks: 【】text【】 -> <u>text</u>
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
 
-        # 2. Handle fill-in-the-blanks: 【word】  -> underlined blank
-        #    We replace with a long underline (same as before)
-        content = re.sub(r'【([^】]+)】', r'<u>________</u>', content)
+        # 2. Fill-in-the-blanks: 【word】 -> underlined blank of appropriate length (fullwidth underscores)
+        def replace_blank(match):
+            word = match.group(1)
+            blank_length = max(len(word) * 2, 4)          # same logic as original
+            blank = '＿' * blank_length                    # fullwidth underscore
+            return f'<u>{blank}</u>'
+        content = re.sub(r'【([^】]+)】', replace_blank, content)
 
-        # (Optional fallback: if the word is not inside brackets, but you want to blank it out,
-        #  you could add another step here. But your data uses brackets, so we keep it simple.)
-
-        # If the paragraph starts with an underline, add a zero‑width space to avoid a rendering bug
+        # 3. Fix for underlines at start of paragraph (zero‑width space)
         if content.strip().startswith('<u>'):
-            if content.strip().startswith('<u>'):
-                content = '\u200B' + content   # zero‑width space character
+            content = '\u200B' + content                   # actual zero‑width space, not HTML entity
 
-        # Check if we need a new page
+        # New page if needed
         if cur_y - line_height < 60:
             c.showPage()
             cur_y = page_height - 60
-            # re-draw header? optional, but we skip for simplicity
 
-        # Draw the question number
+        # Draw question number
         c.setFont(font_name, body_font_size)
         c.drawString(left_margin, cur_y, f"{idx+1}.")
 
-        # Draw the question content with possible underlines and wrapping
+        # Draw question content with underlines and wrapping
         cur_y = draw_text_with_underline_wrapped(
             c,
-            left_margin + 30,      # indent after number
+            left_margin + 30,
             cur_y,
             content,
             font_name,
@@ -337,10 +334,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
             underline_offset=2,
             line_height=line_height
         )
-        # (draw_text_with_underline_wrapped already subtracts line height and extra gap)
 
     # ---- Word list page ----
-    # Gather unique words from original_questions if provided, else from questions
     if original_questions is not None:
         words = [row.get('Word', '').strip() for row in original_questions]
     else:
@@ -356,7 +351,7 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         cur_y -= 30
 
         c.setFont(font_name, 18)
-        # Draw words in two columns for better space usage
+        # Two columns
         col_width = 200
         x1 = left_margin
         x2 = left_margin + col_width + 20
