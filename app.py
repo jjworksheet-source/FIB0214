@@ -23,6 +23,12 @@ st.title("📝 校本填充工作紙生成器")
 
 if 'shuffled_cache' not in st.session_state:
     st.session_state.shuffled_cache = {}
+# ai_choices: { "學校||年級||詞語||row_index": chosen_sentence_text }
+if 'ai_choices' not in st.session_state:
+    st.session_state.ai_choices = {}
+# confirmed_reviews: set of "學校||年級" keys that have been confirmed
+if 'confirmed_reviews' not in st.session_state:
+    st.session_state.confirmed_reviews = set()
 
 # --- ReportLab Import & Font Registration ---
 try:
@@ -77,6 +83,76 @@ def load_data():
     except Exception as e:
         st.error(f"Error reading standby sheet: {e}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def load_review():
+    """
+    讀取 Review 工作表。
+    回傳 DataFrame，欄位：Timestamp, 學校, 年級, 詞語, 句子, 來源, 狀態
+    """
+    try:
+        sh = client.open_by_key(SHEET_ID)
+        worksheet = sh.worksheet("Review")
+        data = worksheet.get_all_records()
+        df_r = pd.DataFrame(data)
+        df_r.columns = [c.strip() for c in df_r.columns]
+        for col in df_r.columns:
+            if df_r[col].dtype == object:
+                df_r[col] = df_r[col].astype(str).str.strip()
+        return df_r
+    except Exception as e:
+        st.error(f"Error reading Review sheet: {e}")
+        return pd.DataFrame()
+
+def build_review_groups(review_df):
+    """
+    將 Review 表整理成：
+    {
+      "學校||年級": {
+        "詞語A": {
+          "original": "句子文字" or None,
+          "ai": ["AI句1", "AI句2", "AI句3"],
+          "row_keys": ["學校||年級||詞語A||0", ...]   # 用於 session_state key
+        },
+        ...
+      }
+    }
+    只有「有 AI 句子（🟨 開頭）」的詞語才會出現在這裡。
+    """
+    groups = {}
+    if review_df.empty or '句子' not in review_df.columns:
+        return groups
+
+    for idx, row in review_df.iterrows():
+        school  = str(row.get('學校', '')).strip()
+        level   = str(row.get('年級', '')).strip()
+        word    = str(row.get('詞語', '')).strip()
+        sentence = str(row.get('句子', '')).strip()
+        if not school or not level or not word or not sentence:
+            continue
+
+        batch_key = f"{school}||{level}"
+        if batch_key not in groups:
+            groups[batch_key] = {}
+        if word not in groups[batch_key]:
+            groups[batch_key][word] = {'original': None, 'ai': [], 'row_keys': []}
+
+        is_ai = sentence.startswith('🟨')
+        clean_sentence = sentence.lstrip('🟨').strip()
+
+        if is_ai:
+            groups[batch_key][word]['ai'].append(clean_sentence)
+            groups[batch_key][word]['row_keys'].append(f"{batch_key}||{word}||{idx}")
+        else:
+            groups[batch_key][word]['original'] = clean_sentence
+
+    # 只保留有 AI 句子的詞語
+    filtered = {}
+    for batch_key, words in groups.items():
+        ai_words = {w: d for w, d in words.items() if d['ai']}
+        if ai_words:
+            filtered[batch_key] = ai_words
+    return filtered
 
 @st.cache_data(ttl=60)
 def load_students():
@@ -146,7 +222,7 @@ with st.sidebar:
     st.subheader("📬 模式")
     send_mode = st.radio(
         "選擇模式",
-        ["📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送"],
+        ["📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送", "🤖 AI 句子審核"],
         index=0,
         label_visibility="collapsed"
     )
@@ -652,6 +728,35 @@ if send_mode == "📄 按學校預覽下載":
         original_questions = school_data.to_dict('records')
         cache_key = f"school_{selected_school}_{selected_level}"
 
+        # --- HOLD CHECK: see if this batch has unconfirmed AI sentences ---
+        review_df_a   = load_review()
+        review_grps_a = build_review_groups(review_df_a)
+        batch_key_a   = f"{selected_school}||{selected_level}"
+        needs_review  = batch_key_a in review_grps_a
+        is_confirmed_a = batch_key_a in st.session_state.confirmed_reviews
+
+        if needs_review and not is_confirmed_a:
+            st.warning(
+                f"⚠️ **{selected_school} {selected_level}** 有 AI 生成句子尚未審核，PDF 暫時鎖定。\n\n"
+                f"請先切換到側欄「🤖 AI 句子審核」模式，選擇句子並確認後再回來生成 PDF。"
+            )
+            st.stop()
+
+        # If confirmed, replace AI-word questions with chosen sentences
+        if needs_review and is_confirmed_a:
+            resolved = []
+            for q in original_questions:
+                word = str(q.get('Word', '')).strip()
+                choice_key = next(
+                    (k for k in st.session_state.ai_choices if k.startswith(f"{batch_key_a}||{word}||")),
+                    None
+                )
+                if choice_key:
+                    q = dict(q)
+                    q['Content'] = st.session_state.ai_choices[choice_key]
+                resolved.append(q)
+            original_questions = resolved
+
         with st.spinner("正在生成文件…"):
             shuffled_questions = get_shuffled_questions(original_questions, cache_key)
             pdf_bytes        = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions).getvalue()
@@ -843,6 +948,34 @@ else:
             original_questions = unique_group.to_dict('records')
             cache_key = f"student_{student_id}_{grade}"
 
+            # --- HOLD CHECK for Mode B ---
+            review_df_b   = load_review()
+            review_grps_b = build_review_groups(review_df_b)
+            batch_key_b   = f"{selected_school_b}||{grade}"
+            needs_review_b  = batch_key_b in review_grps_b
+            is_confirmed_b  = batch_key_b in st.session_state.confirmed_reviews
+
+            if needs_review_b and not is_confirmed_b:
+                st.warning(
+                    f"⚠️ **{selected_school_b} {grade}** 有 AI 生成句子尚未審核，PDF 暫時鎖定。\n\n"
+                    f"請先切換到側欄「🤖 AI 句子審核」模式，選擇句子並確認後再回來。"
+                )
+                st.stop()
+
+            if needs_review_b and is_confirmed_b:
+                resolved_b = []
+                for q in original_questions:
+                    word = str(q.get('Word', '')).strip()
+                    choice_key = next(
+                        (k for k in st.session_state.ai_choices if k.startswith(f"{batch_key_b}||{word}||")),
+                        None
+                    )
+                    if choice_key:
+                        q = dict(q)
+                        q['Content'] = st.session_state.ai_choices[choice_key]
+                    resolved_b.append(q)
+                original_questions = resolved_b
+
             with st.spinner(f"正在生成 {student_name} 的文件…"):
                 shuffled_questions = get_shuffled_questions(original_questions, cache_key)
                 pdf_bytes        = create_pdf(selected_school_b, grade, shuffled_questions, student_name=student_name, original_questions=original_questions).getvalue()
@@ -903,3 +1036,130 @@ else:
 
             with tab_preview:
                 display_pdf_as_images(pdf_bytes)
+
+# ============================================================
+# MODE C: AI 句子審核
+# ============================================================
+if send_mode == "🤖 AI 句子審核":
+    st.subheader("🤖 AI 句子審核")
+    st.caption("以下學校／年級有 AI 生成句子待審核，請為每個詞語選擇一句後按「確認」，PDF 才會解鎖。")
+
+    review_df = load_review()
+    review_groups = build_review_groups(review_df)
+
+    if not review_groups:
+        st.success("✅ 目前 Review 表沒有待審核的 AI 句子，所有 PDF 均可直接生成！")
+        st.stop()
+
+    # Show one expander per school+level batch
+    for batch_key, word_dict in review_groups.items():
+        school_r, level_r = batch_key.split("||")
+        is_confirmed = batch_key in st.session_state.confirmed_reviews
+
+        # Count how many words still need a choice
+        pending = [
+            w for w in word_dict
+            if not any(
+                f"{batch_key}||{w}||" in k
+                for k in st.session_state.ai_choices
+            )
+        ]
+        # More precise: check if every word has a choice stored
+        all_chosen = all(
+            any(k.startswith(f"{batch_key}||{w}||") for k in st.session_state.ai_choices)
+            for w in word_dict
+        )
+
+        status_badge = "✅ 已確認" if is_confirmed else (
+            f"🟡 {len(word_dict) - sum(1 for w in word_dict if any(k.startswith(f'{batch_key}||{w}||') for k in st.session_state.ai_choices))} 題待選" 
+            if not all_chosen else "🟢 可確認"
+        )
+
+        with st.expander(f"🏫 {school_r}  {level_r}　　{status_badge}", expanded=not is_confirmed):
+            if is_confirmed:
+                st.success("此批次已確認，句子已鎖定。如需重新選擇，請按下方「重置」。")
+                if st.button("🔄 重置此批次", key=f"reset_{batch_key}"):
+                    st.session_state.confirmed_reviews.discard(batch_key)
+                    # Remove all choices for this batch
+                    keys_to_del = [k for k in st.session_state.ai_choices if k.startswith(batch_key)]
+                    for k in keys_to_del:
+                        del st.session_state.ai_choices[k]
+                    st.rerun()
+                continue
+
+            # For each word that has AI sentences, show radio
+            for word, data in word_dict.items():
+                ai_list    = data['ai']
+                original   = data['original']
+                row_keys   = data['row_keys']
+
+                st.markdown(f"---\n**詞語：{word}**")
+
+                # Build options list
+                options = []
+                option_labels = []
+                if original:
+                    options.append(('original', original))
+                    option_labels.append(f"📝 原句：{original}")
+                for i, ai_s in enumerate(ai_list):
+                    options.append((f'ai_{i}', ai_s))
+                    option_labels.append(f"🤖 AI {i+1}：{ai_s}")
+
+                # Find existing choice key for this word
+                existing_choice_key = next(
+                    (k for k in st.session_state.ai_choices if k.startswith(f"{batch_key}||{word}||")),
+                    None
+                )
+                default_idx = 0
+                if existing_choice_key:
+                    saved = st.session_state.ai_choices[existing_choice_key]
+                    for i, (_, txt) in enumerate(options):
+                        if txt == saved:
+                            default_idx = i
+                            break
+
+                chosen_label = st.radio(
+                    f"請為「{word}」選擇句子：",
+                    option_labels,
+                    index=default_idx,
+                    key=f"radio_{batch_key}_{word}",
+                    label_visibility="collapsed"
+                )
+
+                # Store chosen sentence text in session_state
+                chosen_idx   = option_labels.index(chosen_label)
+                chosen_text  = options[chosen_idx][1]
+                choice_key   = f"{batch_key}||{word}||{row_keys[0] if row_keys else word}"
+                st.session_state.ai_choices[choice_key] = chosen_text
+
+                # Preview the chosen sentence
+                st.info(f"✏️ 已選：{chosen_text}")
+
+            st.divider()
+
+            # Confirm button — only enabled when all words have a choice
+            all_chosen_now = all(
+                any(k.startswith(f"{batch_key}||{w}||") for k in st.session_state.ai_choices)
+                for w in word_dict
+            )
+
+            if all_chosen_now:
+                if st.button(f"✅ 確認「{school_r} {level_r}」的所有選擇", key=f"confirm_{batch_key}", type="primary", use_container_width=True):
+                    st.session_state.confirmed_reviews.add(batch_key)
+                    st.success(f"🎉 已確認！{school_r} {level_r} 的 PDF 現已解鎖。")
+                    st.rerun()
+            else:
+                st.warning("⚠️ 請為所有詞語選擇句子後才能確認。")
+
+    st.divider()
+    st.subheader("📋 已確認的選擇一覽")
+    if st.session_state.ai_choices:
+        rows = []
+        for k, v in st.session_state.ai_choices.items():
+            parts = k.split("||")
+            if len(parts) >= 3:
+                rows.append({"學校": parts[0], "年級": parts[1], "詞語": parts[2], "已選句子": v})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.caption("尚未有任何確認的選擇。")
