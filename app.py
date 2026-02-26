@@ -238,7 +238,7 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     for i, row in enumerate(questions):
         content = row['Content']
         # 1. 先處理專名號
-        content = re.sub(r' [] (.*?) [] ', r'<u>\1</u>', content)
+        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
         # 2. 再處理填充題
         content = re.sub(r'【[^】]+】', r'<u>________</u>', content)
         # 3. 解決開頭底線失效問題（只做一次）
