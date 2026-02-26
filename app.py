@@ -191,74 +191,155 @@ def get_shuffled_questions(questions, cache_key):
     return questions_list
 
 # --- 4. GENERATE PDF FUNCTION (Student Version) ---
-def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
-    bio = io.BytesIO()
-    doc = SimpleDocTemplate(bio, pagesize=letter)
-    story = []
+def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_width, underline_offset=2, line_height=18):
+    """
+    Draws text with <u>underline</u> tags, wrapping lines automatically.
+    Returns the new y position after drawing.
+    """
+    import re
+    from reportlab.pdfbase import pdfmetrics
 
-    styles = getSampleStyleSheet()
+    # Split text into normal parts and underlined parts
+    parts = re.split(r'(<u>.*?</u>)', text)
+    tokens = []
+    for p in parts:
+        if not p:
+            continue
+        if p.startswith("<u>") and p.endswith("</u>"):
+            tokens.append(p)          # keep underlined part as one token
+        else:
+            # split normal text into individual characters (so we can wrap anywhere)
+            tokens.extend(list(p))
+
+    def measure(tok):
+        if tok.startswith("<u>") and tok.endswith("</u>"):
+            inner = tok[3:-4]
+            return pdfmetrics.stringWidth(inner, font_name, font_size)
+        else:
+            return pdfmetrics.stringWidth(tok, font_name, font_size)
+
+    def draw_line(parts_to_draw, draw_x, draw_y):
+        cx = draw_x
+        for tp in parts_to_draw:
+            if tp.startswith("<u>") and tp.endswith("</u>"):
+                inner = tp[3:-4]
+                c.setFont(font_name, font_size)
+                c.drawString(cx, draw_y, inner)
+                w = pdfmetrics.stringWidth(inner, font_name, font_size)
+                c.line(cx, draw_y - underline_offset, cx + w, draw_y - underline_offset)
+                cx += w
+            else:
+                c.setFont(font_name, font_size)
+                c.drawString(cx, draw_y, tp)
+                cx += pdfmetrics.stringWidth(tp, font_name, font_size)
+
+    cur_y = y
+    line_buf = []
+    line_width = 0
+    for tok in tokens:
+        tok_w = measure(tok)
+        if line_width + tok_w > max_width and line_buf:
+            draw_line(line_buf, x, cur_y)
+            cur_y -= line_height
+            line_buf = [tok]
+            line_width = tok_w
+        else:
+            line_buf.append(tok)
+            line_width += tok_w
+    if line_buf:
+        draw_line(line_buf, x, cur_y)
+        cur_y -= line_height
+
+    # add a small gap after the paragraph
+    cur_y -= 12
+    return cur_y
+def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
+    """
+    Creates a student worksheet PDF using direct canvas drawing.
+    Returns a BytesIO object (same as before).
+    """
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfbase import pdfmetrics
+    import io
+    import re
+    import datetime
+
+    bio = io.BytesIO()
+    c = canvas.Canvas(bio, pagesize=letter)
+    page_width, page_height = letter
+
+    # Use your registered Chinese font
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontName=font_name,
-        fontSize=22,
-        alignment=TA_CENTER,
-        spaceAfter=12
-    )
-    normal_style = ParagraphStyle(
-        'CustomNormal',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=18,
-        leading=26,
-        leftIndent=0,
-        firstLineIndent=0
-    )
-    vocab_title_style = ParagraphStyle(
-        'VocabTitle',
-        parent=styles['Heading2'],
-        fontName=font_name,
-        fontSize=20,
-        alignment=TA_CENTER,
-        spaceAfter=20
-    )
+    # Margins and starting position
+    left_margin = 60
+    top_margin = page_height - 60
+    cur_y = top_margin
 
+    # ---- Title ----
+    c.setFont(font_name, 22)
     if student_name:
-        title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>"
+        title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙"
     else:
-        title_text = f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
+        title = f"{school_name} ({level}) - 校本填充工作紙"
+    c.drawString(left_margin, cur_y, title)
+    cur_y -= 30
 
-    story.append(Paragraph(title_text, title_style))
-    story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
-    story.append(Spacer(1, 0.3*inch))
+    # ---- Date ----
+    c.setFont(font_name, 18)
+    date_str = f"日期: {datetime.date.today() + datetime.timedelta(days=1)}"
+    c.drawString(left_margin, cur_y, date_str)
+    cur_y -= 30
 
-    for i, row in enumerate(questions):
+    # ---- Questions ----
+    max_text_width = page_width - left_margin - 40  # right margin 40
+    line_height = 26
+    body_font_size = 18
+
+    for idx, row in enumerate(questions):
         content = row['Content']
-        # 1. 先處理專名號
+
+        # 1. Handle proper noun marks: 【】text【】  -> <u>text</u>
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
-        # 2. 再處理填充題
-        content = re.sub(r'【[^】]+】', r'<u>________</u>', content)
-        # 3. 解決開頭底線失效問題（只做一次）
+
+        # 2. Handle fill-in-the-blanks: 【word】  -> underlined blank
+        #    We replace with a long underline (same as before)
+        content = re.sub(r'【([^】]+)】', r'<u>________</u>', content)
+
+        # (Optional fallback: if the word is not inside brackets, but you want to blank it out,
+        #  you could add another step here. But your data uses brackets, so we keep it simple.)
+
+        # If the paragraph starts with an underline, add a zero‑width space to avoid a rendering bug
         if content.strip().startswith('<u>'):
             content = '&#8203;' + content
 
-        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
-        content_para = Paragraph(content, normal_style)
+        # Check if we need a new page
+        if cur_y - line_height < 60:
+            c.showPage()
+            cur_y = page_height - 60
+            # re-draw header? optional, but we skip for simplicity
 
-        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
-        t.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 0.15*inch))
+        # Draw the question number
+        c.setFont(font_name, body_font_size)
+        c.drawString(left_margin, cur_y, f"{idx+1}.")
 
-    # --- PAGE 2: Vocabulary Table ---
+        # Draw the question content with possible underlines and wrapping
+        cur_y = draw_text_with_underline_wrapped(
+            c,
+            left_margin + 30,      # indent after number
+            cur_y,
+            content,
+            font_name,
+            body_font_size,
+            max_text_width,
+            underline_offset=2,
+            line_height=line_height
+        )
+        # (draw_text_with_underline_wrapped already subtracts line height and extra gap)
+
+    # ---- Word list page ----
+    # Gather unique words from original_questions if provided, else from questions
     if original_questions is not None:
         words = [row.get('Word', '').strip() for row in original_questions]
     else:
@@ -266,34 +347,36 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     unique_words = list(dict.fromkeys([w for w in words if w]))
 
     if unique_words:
-        story.append(PageBreak())
-        story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
-        story.append(Spacer(1, 0.2*inch))
+        c.showPage()
+        cur_y = page_height - 60
 
-        num_cols = 4
-        table_data = []
-        for i in range(0, len(unique_words), num_cols):
-            row = unique_words[i:i+num_cols]
-            while len(row) < num_cols:
-                row.append('')
-            table_data.append(row)
+        c.setFont(font_name, 20)
+        c.drawString(left_margin, cur_y, "詞語表")
+        cur_y -= 30
 
-        col_width = 1.8*inch
-        vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
-        vocab_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 22),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 16),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ]))
-        story.append(vocab_table)
+        c.setFont(font_name, 18)
+        # Draw words in two columns for better space usage
+        col_width = 200
+        x1 = left_margin
+        x2 = left_margin + col_width + 20
+        col_x = x1
+        for i, word in enumerate(unique_words):
+            if cur_y < 60:
+                c.showPage()
+                cur_y = page_height - 60
+                c.setFont(font_name, 20)
+                c.drawString(left_margin, cur_y, "詞語表 (續)")
+                cur_y -= 30
+                c.setFont(font_name, 18)
+            c.drawString(col_x, cur_y, f"{i+1}. {word}")
+            # alternate columns
+            if (i+1) % 2 == 0:
+                cur_y -= 30
+                col_x = x1
+            else:
+                col_x = x2
 
-    doc.build(story)
+    c.save()
     bio.seek(0)
     return bio
 
