@@ -245,6 +245,18 @@ student_df = load_students()
 review_df  = load_review()
 review_groups = build_review_groups(review_df)
 
+# ── Global auto-confirm: runs on EVERY page load, regardless of mode ──
+# Batches where ALL words are original sentences (no AI candidates)
+# are confirmed automatically so Mode A / B work without visiting AI Review first.
+for _batch_key, _word_dict in review_groups.items():
+    if _batch_key not in st.session_state.confirmed_batches:
+        _has_any_ai = any(d['needs_review'] for d in _word_dict.values())
+        if not _has_any_ai:
+            _final_qs = build_final_pool_for_batch(_batch_key, _word_dict)
+            if _final_qs:
+                st.session_state.final_pool[_batch_key] = _final_qs
+                st.session_state.confirmed_batches.add(_batch_key)
+
 with st.sidebar:
     st.header("⚙️ 控制面板")
 
