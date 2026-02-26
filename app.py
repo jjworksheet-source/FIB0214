@@ -35,6 +35,9 @@ if 'ai_choices' not in st.session_state:
 # confirmed_batches: set of "學校||年級" that have been confirmed
 if 'confirmed_batches' not in st.session_state:
     st.session_state.confirmed_batches = set()
+# track last selected level to detect level switches
+if 'last_selected_level' not in st.session_state:
+    st.session_state.last_selected_level = None
 
 # ============================================================
 # --- ReportLab Import & Font Registration ---
@@ -271,6 +274,11 @@ with st.sidebar:
 
     st.subheader("🎓 年級")
     selected_level = st.radio("選擇年級", all_levels, index=0, label_visibility="collapsed")
+
+    # Reset student selection when level changes
+    if st.session_state.last_selected_level != selected_level:
+        st.session_state.last_selected_level = selected_level
+        st.session_state.selected_student_name_b = None
 
     st.divider()
 
@@ -726,6 +734,15 @@ if send_mode == "🤖 AI 句子審核":
     if not level_groups:
         st.success(f"✅ {selected_level} 目前沒有任何題目。請先在 Google Sheet 的 Review 表新增資料。")
         st.stop()
+
+    # ── Auto-confirm batches that have ZERO AI words (all original sentences) ──
+    for batch_key, word_dict in level_groups.items():
+        if batch_key not in st.session_state.confirmed_batches:
+            has_any_ai = any(d['needs_review'] for d in word_dict.values())
+            if not has_any_ai:
+                final_qs = build_final_pool_for_batch(batch_key, word_dict)
+                st.session_state.final_pool[batch_key] = final_qs
+                st.session_state.confirmed_batches.add(batch_key)
 
     for batch_key, word_dict in level_groups.items():
         school_r, level_r = batch_key.split("||")
