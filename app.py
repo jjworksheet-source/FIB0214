@@ -792,26 +792,28 @@ else:
         h4.markdown("**發送狀態**")
         st.divider()
 
-        # One radio per student row — radio options are student names
+        # One clickable row per student using buttons
         student_names = [r['姓名'] for r in student_rows]
-        selected_name_b = st.radio(
-            "點擊學生進行操作：",
-            student_names,
-            label_visibility="collapsed",
-            key="student_radio_b"
-        )
 
-        # Draw status columns alongside the radio
+        if 'selected_student_name_b' not in st.session_state:
+            st.session_state.selected_student_name_b = student_names[0] if student_names else None
+
         for r in student_rows:
             rc1, rc2, rc3, rc4 = st.columns([3, 2, 2, 3])
-            # blank in rc1 (radio already occupies that space)
+            is_selected = (st.session_state.selected_student_name_b == r['姓名'])
+            label = f"**→ {r['姓名']}**" if is_selected else r['姓名']
+            if rc1.button(label, key=f"btn_{r['_id']}", use_container_width=True):
+                st.session_state.selected_student_name_b = r['姓名']
+                st.rerun()
             rc2.markdown(f"<small>{r['年級']}</small>", unsafe_allow_html=True)
             rc3.markdown(f"<small>{r['PDF']}</small>", unsafe_allow_html=True)
             rc4.markdown(f"<small>{r['發送狀態']}</small>", unsafe_allow_html=True)
 
+        selected_name_b = st.session_state.selected_student_name_b
+
     with col_detail:
         # Find selected student data
-        sel_row = next((r for r in student_rows if r['姓名'] == selected_name_b), None)
+        sel_row = next((r for r in student_rows if r['姓名'] == st.session_state.get('selected_student_name_b')), None)
         if sel_row is None:
             st.info("👈 請從左側列表選擇一位學生。")
         else:
@@ -843,9 +845,9 @@ else:
 
             with st.spinner(f"正在生成 {student_name} 的文件…"):
                 shuffled_questions = get_shuffled_questions(original_questions, cache_key)
-                pdf_bytes        = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions).getvalue()
-                answer_pdf_bytes = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
-                docx_bytes       = create_docx(school_name, grade, shuffled_questions, student_name=student_name).getvalue()
+                pdf_bytes        = create_pdf(selected_school_b, grade, shuffled_questions, student_name=student_name, original_questions=original_questions).getvalue()
+                answer_pdf_bytes = create_answer_pdf(selected_school_b, grade, shuffled_questions, student_name=student_name).getvalue()
+                docx_bytes       = create_docx(selected_school_b, grade, shuffled_questions, student_name=student_name).getvalue()
                 st.session_state.pdf_generated[student_id] = True
 
             tab_gen, tab_preview = st.tabs(["📄 生成與發送", "🔍 預覽工作紙"])
