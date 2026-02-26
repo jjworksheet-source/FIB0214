@@ -127,13 +127,14 @@ def build_review_groups(review_df):
     {
       "學校||年級": {
         "詞語A": {
-          "original": "句子" or None,
-          "ai": ["AI句1", "AI句2", ...],
-          "row_keys": ["學校||年級||詞語A||idx", ...]
+          "original": "句子" or None,   ← 沒有 🟨 的行
+          "ai": ["AI句1", "AI句2", ...], ← 有 🟨 的行
+          "needs_review": True/False,    ← 有 AI 句才需要審核
+          "row_keys": [...]
         }, ...
       }
     }
-    只保留有 AI 句子（🟨 開頭）的詞語。
+    ⚠️ 所有詞語都保留，不論有沒有 AI 句。
     """
     groups = {}
     if review_df.empty or '句子' not in review_df.columns:
@@ -144,7 +145,6 @@ def build_review_groups(review_df):
         level    = str(row.get('年級', '')).strip()
         word     = str(row.get('詞語', '')).strip()
         sentence = str(row.get('句子', '')).strip()
-        content  = str(row.get('Content', '')).strip()
 
         if not school or not level or not word or not sentence:
             continue
@@ -156,8 +156,8 @@ def build_review_groups(review_df):
             groups[batch_key][word] = {
                 'original': None,
                 'ai': [],
-                'row_keys': [],
-                'content': content   # store original Content for PDF
+                'needs_review': False,
+                'row_keys': []
             }
 
         is_ai = sentence.startswith('🟨')
@@ -165,55 +165,75 @@ def build_review_groups(review_df):
 
         if is_ai:
             groups[batch_key][word]['ai'].append(clean_sentence)
+            groups[batch_key][word]['needs_review'] = True
             groups[batch_key][word]['row_keys'].append(f"{batch_key}||{word}||{idx}")
         else:
+            # 原句：直接存入，同時作為 Content 備用
             groups[batch_key][word]['original'] = clean_sentence
-            if not groups[batch_key][word]['content']:
-                groups[batch_key][word]['content'] = clean_sentence
+            groups[batch_key][word]['row_keys'].append(f"{batch_key}||{word}||{idx}")
 
-    # Only keep words that have AI sentences
-    filtered = {}
-    for batch_key, words in groups.items():
-        ai_words = {w: d for w, d in words.items() if d['ai']}
-        if ai_words:
-            filtered[batch_key] = ai_words
-    return filtered
+    return groups
 
-def build_final_pool_from_review(review_df):
+
+def compute_batch_readiness(batch_key, word_dict):
     """
-    Build final_pool directly from Review table (non-AI rows = original sentences).
-    Returns { "學校||年級": [ {Word, Content, School, Level}, ... ] }
+    計算一個批次的就緒狀態。
+    返回：
+      ready_words   — 已就緒的詞語列表（原句 or 已選 AI）
+      pending_words — 仍待選擇 AI 句的詞語列表
+      is_ready      — 全部詞語都就緒了嗎？
     """
-    pool = {}
-    if review_df.empty:
-        return pool
+    ready_words   = []
+    pending_words = []
 
-    for idx, row in review_df.iterrows():
-        school  = str(row.get('學校', '')).strip()
-        level   = str(row.get('年級', '')).strip()
-        word    = str(row.get('詞語', '')).strip()
-        sentence = str(row.get('句子', '')).strip()
-        content  = str(row.get('Content', '')).strip()
+    for word, data in word_dict.items():
+        if data['needs_review']:
+            # 有 AI 句：檢查用戶是否已選
+            chosen = next(
+                (v for k, v in st.session_state.ai_choices.items()
+                 if k.startswith(f"{batch_key}||{word}||")),
+                None
+            )
+            if chosen:
+                ready_words.append((word, chosen))
+            else:
+                pending_words.append(word)
+        else:
+            # 沒有 AI 句：直接用原句
+            if data['original']:
+                ready_words.append((word, data['original']))
 
-        if not school or not level or not word:
-            continue
+    is_ready = len(pending_words) == 0
+    return ready_words, pending_words, is_ready
 
-        # Skip AI candidate rows (🟨) — only keep original rows here
-        if sentence.startswith('🟨'):
-            continue
 
-        batch_key = f"{school}||{level}"
-        if batch_key not in pool:
-            pool[batch_key] = []
+def build_final_pool_for_batch(batch_key, word_dict):
+    """
+    把一個批次的所有詞語（原句 + 已選 AI 句）組合成題目列表。
+    只在 is_ready == True 時呼叫。
+    """
+    school, level = batch_key.split("||")
+    questions = []
 
-        pool[batch_key].append({
-            'Word': word,
-            'Content': content if content else sentence,
-            'School': school,
-            'Level': level,
-        })
+    for word, data in word_dict.items():
+        if data['needs_review']:
+            content = next(
+                (v for k, v in st.session_state.ai_choices.items()
+                 if k.startswith(f"{batch_key}||{word}||")),
+                data['original'] or ''
+            )
+        else:
+            content = data['original'] or ''
 
-    return pool
+        if content:
+            questions.append({
+                'Word': word,
+                'Content': content,
+                'School': school,
+                'Level': level,
+            })
+
+    return questions
 
 # ============================================================
 # --- 3. SIDEBAR ---
@@ -266,14 +286,24 @@ with st.sidebar:
 
     # Stats dashboard
     st.subheader("📊 資料概覽")
-    level_batches = [k for k in review_groups if k.endswith(f"||{selected_level}")]
-    total_words = sum(len(v) for k, v in review_groups.items() if k.endswith(f"||{selected_level}"))
+    level_batches   = [k for k in review_groups if k.endswith(f"||{selected_level}")]
+    total_words     = sum(len(v) for k, v in review_groups.items() if k.endswith(f"||{selected_level}"))
+    ai_words        = sum(
+        1 for k, v in review_groups.items() if k.endswith(f"||{selected_level}")
+        for w, d in v.items() if d['needs_review']
+    )
+    ready_words_cnt = sum(
+        1 for k, v in review_groups.items() if k.endswith(f"||{selected_level}")
+        for w, d in v.items() if not d['needs_review']
+    )
     confirmed_count = len([k for k in st.session_state.confirmed_batches if k.endswith(f"||{selected_level}")])
-    pool_count = sum(len(v) for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}"))
+    pool_count      = sum(len(v) for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}"))
 
-    st.metric(f"{selected_level} 待審核批次", len(level_batches))
-    st.metric(f"{selected_level} 待審核詞語", total_words)
-    st.metric(f"{selected_level} 已確認批次", confirmed_count)
+    st.metric(f"{selected_level} 批次數", len(level_batches))
+    st.metric("總詞語數", total_words)
+    st.metric("✅ 已就緒（原句）", ready_words_cnt)
+    st.metric("🟨 待選 AI 句", ai_words)
+    st.metric("已確認批次", confirmed_count)
     st.metric("題庫已鎖定題目", pool_count)
 
     if not student_df.empty and '狀態' in student_df.columns:
@@ -688,44 +718,29 @@ st.divider()
 # ============================================================
 if send_mode == "🤖 AI 句子審核":
     st.subheader("🤖 AI 句子審核")
-    st.caption("為每個詞語選擇最合適的句子，確認後題目會鎖入題庫，PDF 即可生成。")
+    st.caption("✅ 原句詞語已自動就緒。🟨 AI 候選句詞語請選擇一句，全部就緒後即可確認鎖入題庫。")
 
     # Filter to selected level
     level_groups = {k: v for k, v in review_groups.items() if k.endswith(f"||{selected_level}")}
 
     if not level_groups:
-        st.success(f"✅ {selected_level} 目前沒有待審核的 AI 句子。")
-
-        # Show what's already in final_pool for this level
-        pool_batches = {k: v for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}")}
-        if pool_batches:
-            st.subheader("📦 已鎖定題庫")
-            for bk, qs in pool_batches.items():
-                school_r, level_r = bk.split("||")
-                with st.expander(f"🏫 {school_r}  {level_r}  —  {len(qs)} 題", expanded=False):
-                    for q in qs:
-                        st.markdown(f"- **{q['Word']}**：{q['Content']}")
+        st.success(f"✅ {selected_level} 目前沒有任何題目。請先在 Google Sheet 的 Review 表新增資料。")
         st.stop()
 
     for batch_key, word_dict in level_groups.items():
         school_r, level_r = batch_key.split("||")
         is_confirmed = batch_key in st.session_state.confirmed_batches
 
-        all_chosen = all(
-            any(k.startswith(f"{batch_key}||{w}||") for k in st.session_state.ai_choices)
-            for w in word_dict
-        )
-        chosen_count = sum(
-            1 for w in word_dict
-            if any(k.startswith(f"{batch_key}||{w}||") for k in st.session_state.ai_choices)
-        )
+        # Compute readiness using new helper
+        ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
+        ai_word_count = sum(1 for d in word_dict.values() if d['needs_review'])
 
         if is_confirmed:
-            status_badge = "✅ 已確認"
-        elif all_chosen:
-            status_badge = "🟢 可確認"
+            status_badge = f"✅ 已確認（共 {len(word_dict)} 題）"
+        elif is_ready:
+            status_badge = f"🟢 可確認（{len(word_dict)} 題全部就緒）"
         else:
-            status_badge = f"🟡 {len(word_dict) - chosen_count}/{len(word_dict)} 待選"
+            status_badge = f"🟡 待選 {len(pending_words)}/{ai_word_count} 個 AI 句"
 
         with st.expander(f"🏫 {school_r}  {level_r}　　{status_badge}", expanded=not is_confirmed):
 
@@ -748,83 +763,81 @@ if send_mode == "🤖 AI 句子審核":
                                 st.markdown(f"- **{q['Word']}**：{q['Content']}")
                 continue
 
-            # --- Per-word selection ---
-            for word, data in word_dict.items():
-                ai_list  = data['ai']
-                original = data['original']
-                row_keys = data['row_keys']
+            # --- Show ready (original) words first ---
+            original_words = [(w, d) for w, d in word_dict.items() if not d['needs_review']]
+            ai_words_list  = [(w, d) for w, d in word_dict.items() if d['needs_review']]
 
-                st.markdown(f"---\n**詞語：{word}**")
+            if original_words:
+                st.markdown(f"**✅ 已就緒原句（{len(original_words)} 個詞語，無需選擇）**")
+                for word, data in original_words:
+                    st.markdown(f"&nbsp;&nbsp;&nbsp;&nbsp;• **{word}**：{data['original']}")
+                st.divider()
 
-                options = []
-                option_labels = []
-                if original:
-                    options.append(('original', original))
-                    option_labels.append(f"📝 原句：{original}")
-                for i, ai_s in enumerate(ai_list):
-                    options.append((f'ai_{i}', ai_s))
-                    option_labels.append(f"🤖 AI {i+1}：{ai_s}")
+            # --- Per-word AI selection (only for words that need review) ---
+            if ai_words_list:
+                st.markdown(f"**🟨 請為以下 {len(ai_words_list)} 個詞語選擇 AI 句子：**")
+                for word, data in ai_words_list:
+                    ai_list  = data['ai']
+                    original = data['original']
+                    row_keys = data['row_keys']
 
-                existing_key = next(
-                    (k for k in st.session_state.ai_choices if k.startswith(f"{batch_key}||{word}||")),
-                    None
-                )
-                default_idx = 0
-                if existing_key:
-                    saved = st.session_state.ai_choices[existing_key]
-                    for i, (_, txt) in enumerate(options):
-                        if txt == saved:
-                            default_idx = i
-                            break
+                    st.markdown(f"---\n**詞語：{word}**")
 
-                chosen_label = st.radio(
-                    f"請為「{word}」選擇句子：",
-                    option_labels,
-                    index=default_idx,
-                    key=f"radio_{batch_key}_{word}",
-                    label_visibility="collapsed"
-                )
+                    options = []
+                    option_labels = []
+                    # Include original as an option if it exists
+                    if original:
+                        options.append(('original', original))
+                        option_labels.append(f"📝 原句：{original}")
+                    for i, ai_s in enumerate(ai_list):
+                        options.append((f'ai_{i}', ai_s))
+                        option_labels.append(f"🤖 AI {i+1}：{ai_s}")
 
-                chosen_idx  = option_labels.index(chosen_label)
-                chosen_text = options[chosen_idx][1]
-                choice_key  = f"{batch_key}||{word}||{row_keys[0] if row_keys else word}"
-                st.session_state.ai_choices[choice_key] = chosen_text
-                st.info(f"✏️ 已選：{chosen_text}")
+                    existing_key = next(
+                        (k for k in st.session_state.ai_choices if k.startswith(f"{batch_key}||{word}||")),
+                        None
+                    )
+                    default_idx = 0
+                    if existing_key:
+                        saved = st.session_state.ai_choices[existing_key]
+                        for i, (_, txt) in enumerate(options):
+                            if txt == saved:
+                                default_idx = i
+                                break
+
+                    chosen_label = st.radio(
+                        f"請為「{word}」選擇句子：",
+                        option_labels,
+                        index=default_idx,
+                        key=f"radio_{batch_key}_{word}",
+                        label_visibility="collapsed"
+                    )
+
+                    chosen_idx  = option_labels.index(chosen_label)
+                    chosen_text = options[chosen_idx][1]
+                    choice_key  = f"{batch_key}||{word}||{row_keys[0] if row_keys else word}"
+                    st.session_state.ai_choices[choice_key] = chosen_text
+                    st.info(f"✏️ 已選：{chosen_text}")
 
             st.divider()
 
-            all_chosen_now = all(
-                any(k.startswith(f"{batch_key}||{w}||") for k in st.session_state.ai_choices)
-                for w in word_dict
-            )
+            # Recompute readiness after selections
+            _, pending_now, is_ready_now = compute_batch_readiness(batch_key, word_dict)
 
-            if all_chosen_now:
+            if is_ready_now:
                 if st.button(
-                    f"✅ 確認並鎖入題庫：{school_r} {level_r}",
+                    f"✅ 確認並鎖入題庫：{school_r} {level_r}（共 {len(word_dict)} 題）",
                     key=f"confirm_{batch_key}",
                     type="primary",
                     use_container_width=True
                 ):
-                    # Build final question list for this batch
-                    final_qs = []
-                    for word, data in word_dict.items():
-                        ck = next(
-                            (k for k in st.session_state.ai_choices if k.startswith(f"{batch_key}||{word}||")),
-                            None
-                        )
-                        chosen_content = st.session_state.ai_choices[ck] if ck else (data['original'] or '')
-                        final_qs.append({
-                            'Word': word,
-                            'Content': chosen_content,
-                            'School': school_r,
-                            'Level': level_r,
-                        })
+                    final_qs = build_final_pool_for_batch(batch_key, word_dict)
                     st.session_state.final_pool[batch_key] = final_qs
                     st.session_state.confirmed_batches.add(batch_key)
                     st.success(f"🎉 已確認！{school_r} {level_r} 共 {len(final_qs)} 題鎖入題庫，PDF 現已解鎖。")
                     st.rerun()
             else:
-                st.warning("⚠️ 請為所有詞語選擇句子後才能確認。")
+                st.warning(f"⚠️ 還有 {len(pending_now)} 個詞語待選 AI 句：{', '.join(pending_now)}")
 
     # Summary table
     st.divider()
