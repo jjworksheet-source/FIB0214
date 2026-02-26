@@ -1,4 +1,4 @@
-can you modify for me:import streamlit as st
+import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
@@ -182,16 +182,8 @@ edited_df = st.data_editor(
 
 # --- HELPER: Shuffle questions once for consistency across all documents ---
 def get_shuffled_questions(questions, cache_key):
-    """
-    Get shuffled questions with caching.
-    Same cache_key returns same order within session.
-    Different sessions get different random orders.
-    """
-    # Check if already shuffled in this session
     if cache_key in st.session_state.shuffled_cache:
         return st.session_state.shuffled_cache[cache_key]
-
-    # First time: shuffle and cache
     questions_list = list(questions)
     random.seed(int(time.time() * 1000))
     random.shuffle(questions_list)
@@ -200,12 +192,6 @@ def get_shuffled_questions(questions, cache_key):
 
 # --- 4. GENERATE PDF FUNCTION (Student Version) ---
 def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
-    """
-    Create student PDF.
-    Questions are displayed in the order provided (no internal shuffling).
-    Answers are hidden (replaced with underlines).
-    Page 2: Vocabulary table with unique words from the "Word" column.
-    """
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
@@ -227,9 +213,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         fontName=font_name,
         fontSize=18,
         leading=26,
-        leftIndent=0,      # 增加左縮排
-        firstLineIndent=0  # 首行負縮排（與 leftIndent 相同）
-
+        leftIndent=0,
+        firstLineIndent=0
     )
     vocab_title_style = ParagraphStyle(
         'VocabTitle',
@@ -250,7 +235,6 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
-    # Generate questions in the order provided (shuffling done externally)
     for i, row in enumerate(questions):
         content = row['Content']
         # 1. 先處理專名號
@@ -262,9 +246,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
             content = '&#8203;' + content
 
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
-        
         content_para = Paragraph(content, normal_style)
-    
+
         t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
         t.setStyle(TableStyle([
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -276,41 +259,37 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         story.append(Spacer(1, 0.15*inch))
 
     # --- PAGE 2: Vocabulary Table ---
-    # Extract unique words from the "Word" column using ORIGINAL order
     if original_questions is not None:
         words = [row.get('Word', '').strip() for row in original_questions]
     else:
         words = [row.get('Word', '').strip() for row in questions]
-    unique_words = list(dict.fromkeys([w for w in words if w]))  # Remove duplicates, preserve order
-    
+    unique_words = list(dict.fromkeys([w for w in words if w]))
+
     if unique_words:
         story.append(PageBreak())
         story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
         story.append(Spacer(1, 0.2*inch))
-        
-        # Organize words into rows (4 columns)
+
         num_cols = 4
         table_data = []
         for i in range(0, len(unique_words), num_cols):
             row = unique_words[i:i+num_cols]
-            # Pad row with empty strings if needed
             while len(row) < num_cols:
                 row.append('')
             table_data.append(row)
-        
-        # Create table with styling
+
         col_width = 1.8*inch
         vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
         vocab_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 22),        # ← 改大字體（原本14）
+            ('FONTSIZE', (0, 0), (-1, -1), 22),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 16),       # ← 增加上下padding
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),    # ← 增加上下padding
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),      # ← 增加左右padding
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),     # ← 增加左右padding
+            ('TOPPADDING', (0, 0), (-1, -1), 16),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
         ]))
         story.append(vocab_table)
 
@@ -320,13 +299,8 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 
 # --- FEATURE 2: Teacher Answer PDF Function ---
 def create_answer_pdf(school_name, level, questions, student_name=None):
-    """
-    Create teacher answer PDF with answers visible.
-    Questions are displayed in the order provided (same as student PDF).
-    Answers are shown clearly highlighted in RED - using the "Word" column.
-    """
     from reportlab.lib.colors import blue, red
-    
+
     bio = io.BytesIO()
     doc = SimpleDocTemplate(bio, pagesize=letter)
     story = []
@@ -361,7 +335,6 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
         firstLineIndent=0
     )
 
-    # Title with "教師版答案" indicator
     if student_name:
         title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>"
     else:
@@ -373,41 +346,31 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
-    # Display questions in the order provided (same order as student PDF)
     for i, row in enumerate(questions):
         content = row['Content']
-        
-        # Get the answer from the "Word" column
         answer = row.get('Word', '')
-        
-        # Strategy: The Content field may have blanks in different formats:
-        # 1. Underscores: ________ or ＿＿＿＿
-        # 2. Brackets with answer: 【answer】
-        # 3. Empty brackets: 【】text【】
-        
-        # First, try to replace underscores/blanks with the answer from Word column
+
         if answer:
-            # Replace various blank patterns with the highlighted answer
             answer_html = f'<font color="red"><b>【{answer}】</b></font>'
-            
-            # Pattern: Multiple underscores (half-width or full-width)
+            # Replace underscores with answer
             content = re.sub(r'_{2,}|＿{2,}', answer_html, content)
-            
-            # Pattern: 【】text【】 (empty brackets surrounding text - keep original behavior)
+            # Handle 【】text【】 proper noun marks
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+            # Handle 【answer】 blanks — fixed: added capture group ()
             content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
         else:
-            # No Word answer - try bracket patterns only
+            # No Word answer - handle bracket patterns only
             content = re.sub(r'【】(.+?)【】', r'<font color="red"><b>【\1】</b></font>', content)
+            # Fixed: added capture group ()
             content = re.sub(r'【([^】]+)】', r'<font color="red"><b>【\1】</b></font>', content)
-        
+
         # 解決開頭紅字標籤失效問題
         if content.strip().startswith('<font'):
             content = '&#8203;' + content
-        
+
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
         content_para = Paragraph(content, normal_style)
-        
+
         t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
         t.setStyle(TableStyle([
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -422,20 +385,16 @@ def create_answer_pdf(school_name, level, questions, student_name=None):
     bio.seek(0)
     return bio
 
-# --- SendGrid Email Function (FIXED) ---
+# --- SendGrid Email Function ---
 def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, cc_email=None):
     try:
         sg_config = st.secrets["sendgrid"]
 
-        # --- CLEAN & VALIDATE RECIPIENT ---
         recipient = str(to_email).strip()
         if not re.match(r'^[\w\.-]+@[\w\.-]+\.\w+$', recipient):
             return False, f"無效的家長電郵格式: '{recipient}'"
 
-        # --- BUILD MESSAGE (use Email object, not tuple) ---
         from_email_obj = Email(sg_config["from_email"], sg_config.get("from_name", ""))
-
-        # Clean student name for filename (remove non-ASCII)
         safe_name = re.sub(r'[^\w\-]', '_', str(student_name).strip())
 
         message = Mail(
@@ -450,13 +409,11 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             """
         )
 
-        # --- CLEAN & VALIDATE CC ---
         if cc_email:
             cc_clean = str(cc_email).strip().lower()
             if cc_clean not in ["n/a", "nan", "", "none"] and "@" in cc_clean and cc_clean != recipient.lower():
                 message.add_cc(cc_clean)
 
-        # --- ATTACHMENT ---
         encoded_pdf = base64.b64encode(pdf_bytes).decode()
         attachment = Attachment(
             FileContent(encoded_pdf),
@@ -466,7 +423,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         )
         message.add_attachment(attachment)
 
-        # --- SEND ---
         sg = SendGridAPIClient(sg_config["api_key"])
         response = sg.send(message)
 
@@ -476,7 +432,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
             return False, f"SendGrid Error: {response.status_code}"
 
     except HTTPError as e:
-        # Shows the REAL detailed error from SendGrid
         try:
             return False, e.body.decode("utf-8")
         except Exception:
@@ -485,10 +440,6 @@ def send_email_with_pdf(to_email, student_name, school_name, grade, pdf_bytes, c
         return False, str(e)
 
 def create_docx(school_name, level, questions, student_name=None):
-    """
-    Create Word document with questions.
-    Questions are displayed in the order provided (same as PDFs).
-    """
     doc = Document()
 
     if student_name:
@@ -514,7 +465,7 @@ def create_docx(school_name, level, questions, student_name=None):
     doc.save(bio)
     bio.seek(0)
     return bio
-    
+
 # --- Helper: Render PDF pages as images ---
 def display_pdf_as_images(pdf_bytes):
     try:
@@ -543,20 +494,16 @@ if send_mode == "📄 按學校預覽下載":
 
         col1, col2 = st.columns([1, 2])
 
-        # Shuffle questions ONCE for consistency across all documents
         original_questions = school_data.to_dict('records')
         cache_key = f"school_{selected_school}_{selected_level}"
         shuffled_questions = get_shuffled_questions(original_questions, cache_key)
-        
-        # Generate all documents with the SAME shuffled question order
+
         pdf_buffer = create_pdf(selected_school, selected_level, shuffled_questions, original_questions=original_questions)
         pdf_bytes = pdf_buffer.getvalue()
-        
-        # Teacher answer PDF uses same order as student PDF
+
         answer_pdf_buffer = create_answer_pdf(selected_school, selected_level, shuffled_questions)
         answer_pdf_bytes = answer_pdf_buffer.getvalue()
-        
-        # Word document uses same order
+
         docx_buffer = create_docx(selected_school, selected_level, shuffled_questions)
         docx_bytes = docx_buffer.getvalue()
 
@@ -582,8 +529,7 @@ if send_mode == "📄 按學校預覽下載":
                 use_container_width=True,
                 key=f"dl_docx_{selected_school}_{selected_level}"
             )
-            
-            # --- FEATURE 2: Teacher Answer PDF Download Button ---
+
             st.download_button(
                 label=f"📥 下載教師版答案 PDF",
                 data=answer_pdf_bytes,
@@ -592,7 +538,7 @@ if send_mode == "📄 按學校預覽下載":
                 use_container_width=True,
                 key=f"dl_answer_{selected_school}_{selected_level}"
             )
-            
+
             st.info("💡 Fix typos in Google Sheet, then click 'Refresh Data' above.")
 
         with col2:
@@ -622,12 +568,10 @@ else:
         st.warning("⚠️ 「學生資料」中沒有「狀態 = Y」的學生。請先將測試學生的狀態改為 Y。")
         st.stop()
 
-    # 只保留有勾選 Select 的題目（避免未勾選都被配對）
     questions_df = edited_df
     if 'Select' in questions_df.columns:
         questions_df = questions_df[questions_df['Select'] == True]
 
-    # 題目去重：優先用 standby 的 ID（最穩陣）；如果冇 ID 就用 Content
     if 'ID' in questions_df.columns:
         questions_df = questions_df.drop_duplicates(subset=['ID'])
     else:
@@ -656,17 +600,13 @@ else:
     student_count = merged['學生編號'].nunique()
     st.success(f"✅ 成功配對 {student_count} 位學生（按學生編號），共 {len(merged)} 筆配對資料")
 
-    # ✅ 每位學生一份：按「學生編號」分組
     for student_id, group in merged.groupby('學生編號'):
-        # 由 group 取回真正的家長電郵（分組 key 已經唔係 email）
         parent_email = str(group['家長 Email'].iloc[0]).strip()
-
         student_name  = group['學生姓名'].iloc[0]
         school_name   = group['學校'].iloc[0]
         grade         = group['年級'].iloc[0]
         teacher_email = group['老師 Email'].iloc[0] if '老師 Email' in group.columns else "N/A"
 
-        # 保險：每位學生的題目再去重一次（避免任何上游重覆）
         if 'ID' in group.columns:
             unique_group = group.drop_duplicates(subset=['ID'])
             question_count = unique_group['ID'].nunique()
@@ -677,20 +617,16 @@ else:
         st.divider()
         col1, col2 = st.columns([1, 2])
 
-        # Shuffle questions ONCE for consistency across all documents for this student
         original_questions = unique_group.to_dict('records')
         cache_key = f"student_{student_id}_{grade}"
         shuffled_questions = get_shuffled_questions(original_questions, cache_key)
-        
-        # Generate all documents with the SAME shuffled question order
+
         pdf_buffer = create_pdf(school_name, grade, shuffled_questions, student_name=student_name, original_questions=original_questions)
         pdf_bytes  = pdf_buffer.getvalue()
-        
-        # Teacher answer PDF uses same order as student PDF
+
         answer_pdf_buffer = create_answer_pdf(school_name, grade, shuffled_questions, student_name=student_name)
         answer_pdf_bytes = answer_pdf_buffer.getvalue()
-        
-        # Word document uses same order
+
         docx_buffer = create_docx(school_name, grade, shuffled_questions, student_name=student_name)
         docx_bytes  = docx_buffer.getvalue()
 
@@ -702,7 +638,6 @@ else:
             st.write(f"**👩‍🏫 老師：** {teacher_email}")
             st.write(f"**📝 題目數：** {question_count} 題")
 
-            # ✅ key 用 student_id，避免同一測試 email 撞 key
             st.download_button(
                 label=f"📥 下載 {student_name} PDF",
                 data=pdf_bytes,
@@ -719,8 +654,7 @@ else:
                 use_container_width=True,
                 key=f"dl_docx_{student_id}"
             )
-            
-            # --- FEATURE 2: Teacher Answer PDF Download Button ---
+
             st.download_button(
                 label=f"📥 下載教師版答案 PDF",
                 data=answer_pdf_bytes,
