@@ -89,10 +89,12 @@ except Exception as e:
 # --- 2. DATA LOADING ---
 # ============================================================
 @st.cache_data(ttl=60)
+@st.cache_data(ttl=60)
 def load_review():
     """
     讀取 Review 工作表。
     欄位：Timestamp, 學校, 年級, 詞語, 句子, 來源（可選）, 狀態（可選）
+    只讀取「狀態」不是「已完成」的資料列。
     """
     try:
         sh = client.open_by_key(SHEET_ID)
@@ -100,6 +102,8 @@ def load_review():
         data = worksheet.get_all_records()
         df_r = pd.DataFrame(data)
         df_r.columns = [c.strip() for c in df_r.columns]
+        if '狀態' in df_r.columns:
+            df_r = df_r[df_r['狀態'] != '已完成']
         for col in df_r.columns:
             if df_r[col].dtype == object:
                 df_r[col] = df_r[col].astype(str).str.strip()
