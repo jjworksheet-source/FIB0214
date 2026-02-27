@@ -284,7 +284,7 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
 # --- Student Worksheet PDF Generator ---
 # ============================================================
 
-def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
+def create_pdf(school_name, level, questions, student_name=None):
     from reportlab.pdfgen import canvas as rl_canvas
 
     bio = io.BytesIO()
