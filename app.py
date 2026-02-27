@@ -261,7 +261,7 @@ def create_pdf(school_name, level, questions, student_name=None):
     c = rl_canvas.Canvas(bio, pagesize=letter)
     _, page_height = letter
     font_name = CHINESE_FONT or "Helvetica"
-    max_width = 500
+    max_width = 450
     cur_y = page_height - 60
 
     c.setFont(font_name, 22)
