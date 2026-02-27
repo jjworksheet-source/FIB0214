@@ -295,10 +295,8 @@ with st.sidebar:
             st.session_state.ai_choices = {}
             st.session_state.confirmed_batches = set()
             st.session_state.shuffled_cache = {}
-            for key in ["selected_school", "selected_grade", "selected_student"]:
-                if key in st.session_state:
-                    del st.session_state[key]
-                    st.rerun()
+            st.rerun()
+        
             with col_s:
                 if st.button("🔀 打亂題目", use_container_width=True):
                     st.session_state.shuffled_cache = {}
