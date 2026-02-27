@@ -171,31 +171,31 @@ def compute_batch_readiness(batch_key: str, word_dict: dict):
     pending_words = []
 
     # 顯示每個詞語
-for word, data in word_dict.items():
-    st.markdown(f"**詞語：{word}**")
-
-    if data["needs_review"]:
-        # AI 候選句
-        ai_list = data["ai"]
-        key_prefix = f"{batch_key}||{word}"
-
-        for idx, ai_sentence in enumerate(ai_list):
-            key = f"{key_prefix}||{idx}"
-            selected = st.radio(
-                f"AI 候選句 {idx+1}",
-                ["不選", ai_sentence],
-                index=1 if st.session_state.ai_choices.get(key) else 0,
-                key=key
-            )
-
-            if selected != "不選":
-                st.session_state.ai_choices[key] = ai_sentence
-            else:
-                st.session_state.ai_choices.pop(key, None)
-
-    else:
-        # 原句
-        st.success(f"原句：{data['original']}")
+    for word, data in word_dict.items():
+        st.markdown(f"**詞語：{word}**")
+    
+        if data["needs_review"]:
+            # AI 候選句
+            ai_list = data["ai"]
+            key_prefix = f"{batch_key}||{word}"
+    
+            for idx, ai_sentence in enumerate(ai_list):
+                key = f"{key_prefix}||{idx}"
+                selected = st.radio(
+                    f"AI 候選句 {idx+1}",
+                    ["不選", ai_sentence],
+                    index=1 if st.session_state.ai_choices.get(key) else 0,
+                    key=key
+                )
+    
+                if selected != "不選":
+                    st.session_state.ai_choices[key] = ai_sentence
+                else:
+                    st.session_state.ai_choices.pop(key, None)
+    
+        else:
+            # 原句
+            st.success(f"原句：{data['original']}")
 
 # ============================================================
 # --- Final Pool Builder ---
