@@ -170,25 +170,32 @@ def compute_batch_readiness(batch_key: str, word_dict: dict):
     ready_words = []
     pending_words = []
 
-    for word, data in word_dict.items():
-        if data["needs_review"]:
-            # 找使用者是否已選 AI 句
-            chosen = next(
-                (v for k, v in st.session_state.ai_choices.items()
-                 if k.startswith(f"{batch_key}||{word}||")),
-                None
-            )
-            if chosen:
-                ready_words.append((word, chosen))
-            else:
-                pending_words.append(word)
-        else:
-            # 原句直接就緒
-            if data["original"]:
-                ready_words.append((word, data["original"]))
+    # 顯示每個詞語
+for word, data in word_dict.items():
+    st.markdown(f"**詞語：{word}**")
 
-    is_ready = len(pending_words) == 0
-    return ready_words, pending_words, is_ready
+    if data["needs_review"]:
+        # AI 候選句
+        ai_list = data["ai"]
+        key_prefix = f"{batch_key}||{word}"
+
+        for idx, ai_sentence in enumerate(ai_list):
+            key = f"{key_prefix}||{idx}"
+            selected = st.radio(
+                f"AI 候選句 {idx+1}",
+                ["不選", ai_sentence],
+                index=1 if st.session_state.ai_choices.get(key) else 0,
+                key=key
+            )
+
+            if selected != "不選":
+                st.session_state.ai_choices[key] = ai_sentence
+            else:
+                st.session_state.ai_choices.pop(key, None)
+
+    else:
+        # 原句
+        st.success(f"原句：{data['original']}")
 
 # ============================================================
 # --- Final Pool Builder ---
