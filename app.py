@@ -26,7 +26,7 @@ from python_http_client.exceptions import HTTPError
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝", layout="wide")
 st.title("📝 校本填充工作紙生成器")
 
-pythonst.session_state.setdefault("selected_student_name_b", None)  # ← 新增
+st.session_state.setdefault("selected_student_name_b", None)  # ← 新增
 
 # 防止 final_pool 被污染
 if not isinstance(st.session_state.final_pool, dict):
