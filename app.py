@@ -515,7 +515,7 @@ with st.sidebar:
         for w, d in v.items() if not d["needs_review"]
     )
     confirmed_count = len([k for k in st.session_state.confirmed_batches if k.endswith(f"||{selected_level}")])
-   	pool_count = sum(len(v) for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}") and isinstance(v, list))
+	    pool_count = sum(len(v) for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}") and isinstance(v, list))
 
     st.metric(f"{selected_level} 批次數", len(level_batches))
     st.metric("總詞語數", total_words)
