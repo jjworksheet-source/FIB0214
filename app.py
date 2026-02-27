@@ -162,10 +162,9 @@ def parse_review_table(df: pd.DataFrame):
 def compute_batch_readiness(batch_key: str, word_dict: dict):
     ready_words = []
     pending_words = []
-
     for word, data in word_dict.items():
         if data["needs_review"]:
-            # 新格式：統一用 {batch_key}||{word}||0 作為 key
+            # 統一使用新的 key 格式
             chosen = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", None)
             if chosen:
                 ready_words.append((word, chosen))
@@ -174,7 +173,6 @@ def compute_batch_readiness(batch_key: str, word_dict: dict):
         else:
             if data["original"]:
                 ready_words.append((word, data["original"]))
-
     is_ready = len(pending_words) == 0
     return ready_words, pending_words, is_ready
 
@@ -185,16 +183,19 @@ def compute_batch_readiness(batch_key: str, word_dict: dict):
 def build_final_pool_for_batch(batch_key: str, word_dict: dict):
     school, level = batch_key.split("||")
     questions = []
-
     for word, data in word_dict.items():
         if data["needs_review"]:
-            # 新格式：統一用 {batch_key}||{word}||0 作為 key
-            content = st.session_state.ai_choices.get(
-                f"{batch_key}||{word}||0",
-                data["original"] or ""
-            )
+            content = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", "")
         else:
             content = data["original"] or ""
+        if content:
+            questions.append({
+                "Word": word,
+                "Content": content,
+                "School": school,
+                "Level": level,
+            })
+    return questions
 
 # ============================================================
 # --- PDF Text Rendering Helpers ---
@@ -576,56 +577,81 @@ if send_mode == "🤖 AI 句子審核":
         school, level = batch_key.split("||")
         st.markdown(f"### 🏫 {school}（{level}）")
 
-        # 檢查這組題目中，是否有任何一個詞語需要 AI 審核
         has_any_ai_review = any(d["needs_review"] for d in word_dict.values())
 
         if not has_any_ai_review:
             # --- 情況 1：全部都是原句，不需要審核 ---
             st.info(f"💡 這次 **{school}** 學校句子沒有需要審核，請直接到「按學校預覽下載」或「按學生寄送」使用工作紙。")
             
-            # 自動確保這些題目已進入 final_pool
             if batch_key not in st.session_state.confirmed_batches:
                 final_qs = build_final_pool_for_batch(batch_key, word_dict)
                 st.session_state.final_pool[batch_key] = final_qs
                 st.session_state.confirmed_batches.add(batch_key)
-        
+
         else:
             # --- 情況 2：有 AI 句需要審核 ---
             ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
-            
-            # 只顯示需要審核的詞語
+
             for word, data in word_dict.items():
                 if data["needs_review"]:
-                    st.markdown(f"**詞語：{word}**")
+                    st.markdown(f"#### 詞語：{word}")
                     ai_list = data["ai"]
-                    key_prefix = f"{batch_key}||{word}"
+                    key_radio = f"{batch_key}||{word}||choice"
+                    key_custom = f"{batch_key}||{word}||custom"
 
-                    for idx, ai_sentence in enumerate(ai_list):
-                        key = f"{key_prefix}||{idx}"
-                        selected = st.radio(
-                            f"AI 候選句 {idx+1}",
-                            ["不選", ai_sentence],
-                            index=1 if st.session_state.ai_choices.get(key) else 0,
-                            key=key
+                    # 選項：AI 句子 + 自行輸入（移除「不選」）
+                    options = ai_list + ["✏️ 自行輸入句子"]
+
+                    # 決定預設選哪一個
+                    current = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", None)
+                    if current in ai_list:
+                        default_index = ai_list.index(current)
+                    elif current and current not in ai_list:
+                        default_index = len(options) - 1
+                    else:
+                        default_index = 0  # 預設選第一句
+
+                    selected = st.radio(
+                        f"請為「{word}」選擇最合適的句子：",
+                        options,
+                        index=default_index,
+                        key=key_radio
+                    )
+
+                    if selected == "✏️ 自行輸入句子":
+                        prev_custom = st.session_state.get(key_custom, "")
+                        custom_input = st.text_input(
+                            f"請輸入「{word}」的自定義句子（請用【】詞語【】標示）：",
+                            value=prev_custom,
+                            key=key_custom,
+                            placeholder="例如：小明【定期】到牙科診所檢查牙齒。"
                         )
-                        if selected != "不選":
-                            st.session_state.ai_choices[key] = ai_sentence
+                        if custom_input.strip():
+                            st.session_state.ai_choices[f"{batch_key}||{word}||0"] = custom_input.strip()
                         else:
-                            st.session_state.ai_choices.pop(key, None)
-                # 原句在這裡被隱藏了，不顯示
+                            st.session_state.ai_choices.pop(f"{batch_key}||{word}||0", None)
+                    else:
+                        st.session_state.ai_choices[f"{batch_key}||{word}||0"] = selected
+                        if key_custom in st.session_state:
+                            del st.session_state[key_custom]
 
-            # 顯示確認按鈕
+            # 顯示待確認詞語提示
+            if pending_words:
+                st.warning(f"⚠️ 以下詞語尚未選擇句子：{', '.join(pending_words)}")
+
+            # 確認鎖定按鈕
             if is_ready and batch_key not in st.session_state.confirmed_batches:
                 if st.button(f"🔒 確認並鎖定題庫：{school}", key=f"confirm_{batch_key}"):
                     final_qs = build_final_pool_for_batch(batch_key, word_dict)
                     st.session_state.final_pool[batch_key] = final_qs
                     st.session_state.confirmed_batches.add(batch_key)
-                    st.success("已鎖定題庫！")
+                    st.success("✅ 已鎖定題庫！")
                     st.rerun()
             elif batch_key in st.session_state.confirmed_batches:
                 st.success("✅ 此批次已完成審核並鎖定。")
 
         st.divider()
+	
 
 # ============================================================
 # --- Mode B: 按學校預覽下載 ---
