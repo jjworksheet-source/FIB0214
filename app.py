@@ -29,7 +29,10 @@ st.title("📝 校本填充工作紙生成器")
 st.session_state.setdefault("selected_student_name_b", None)  # ← 新增
 
 # 防止 final_pool 被污染
-if not isinstance(st.session_state.final_pool, dict):
+# 初始化或確保 final_pool 是字典
+if "final_pool" not in st.session_state:
+    st.session_state.final_pool = {}
+elif not isinstance(st.session_state.final_pool, dict):
     st.session_state.final_pool = {}
 	
 # ============================================================
