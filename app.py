@@ -719,17 +719,14 @@ if send_mode == "👨‍👩‍👧 按學生寄送":
         st.stop()
 
     # 學生選擇
-    student_names = df_level["姓名"].tolist()
+    student_names = df_level["學生姓名"].tolist()
     selected_student = st.selectbox("選擇學生", [""] + student_names)
+    
+    row = df_level[df_level["學生姓名"] == selected_student].iloc[0]
+    
+    parent_email = row.get("家長 Email", "")
+    cc_email = row.get("老師 Email", "")
 
-    if not selected_student:
-        st.stop()
-
-    row = df_level[df_level["姓名"] == selected_student].iloc[0]
-    school = row["學校"]
-    grade = row["年級"]
-    parent_email = row.get("家長電郵", "")
-    cc_email = row.get("副本電郵", "")
 
     batch_key = f"{school}||{grade}"
 
