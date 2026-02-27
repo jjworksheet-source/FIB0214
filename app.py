@@ -296,10 +296,9 @@ with st.sidebar:
             st.session_state.confirmed_batches = set()
             st.session_state.shuffled_cache = {}
             st.rerun()
-        
-            with col_s:
-                if st.button("🔀 打亂題目", use_container_width=True):
-                    st.session_state.shuffled_cache = {}
+    with col_s:
+        if st.button("🔀 打亂題目", use_container_width=True):
+            st.session_state.shuffled_cache = {}
             st.rerun()
 
     st.divider()
