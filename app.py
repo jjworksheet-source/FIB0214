@@ -160,42 +160,23 @@ def parse_review_table(df: pd.DataFrame):
 # ============================================================
 
 def compute_batch_readiness(batch_key: str, word_dict: dict):
-    """
-    判斷一個批次是否已就緒（所有詞語都有句子：原句或已選 AI）。
-    回傳：
-      ready_words   — [(詞語, 句子), ...]
-      pending_words — [詞語, ...]
-      is_ready      — True/False
-    """
     ready_words = []
     pending_words = []
 
-    # 顯示每個詞語
     for word, data in word_dict.items():
-        st.markdown(f"**詞語：{word}**")
-    
         if data["needs_review"]:
-            # AI 候選句
-            ai_list = data["ai"]
-            key_prefix = f"{batch_key}||{word}"
-    
-            for idx, ai_sentence in enumerate(ai_list):
-                key = f"{key_prefix}||{idx}"
-                selected = st.radio(
-                    f"AI 候選句 {idx+1}",
-                    ["不選", ai_sentence],
-                    index=1 if st.session_state.ai_choices.get(key) else 0,
-                    key=key
-                )
-    
-                if selected != "不選":
-                    st.session_state.ai_choices[key] = ai_sentence
-                else:
-                    st.session_state.ai_choices.pop(key, None)
-    
+            # 新格式：統一用 {batch_key}||{word}||0 作為 key
+            chosen = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", None)
+            if chosen:
+                ready_words.append((word, chosen))
+            else:
+                pending_words.append(word)
         else:
-            # 原句
-            st.success(f"原句：{data['original']}")
+            if data["original"]:
+                ready_words.append((word, data["original"]))
+
+    is_ready = len(pending_words) == 0
+    return ready_words, pending_words, is_ready
 
 # ============================================================
 # --- Final Pool Builder ---
