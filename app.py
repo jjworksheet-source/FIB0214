@@ -26,13 +26,12 @@ from python_http_client.exceptions import HTTPError
 st.set_page_config(page_title="Worksheet Generator", page_icon="📝", layout="wide")
 st.title("📝 校本填充工作紙生成器")
 
-# Session state
-st.session_state.setdefault("shuffled_cache", {})
-st.session_state.setdefault("final_pool", {})
-st.session_state.setdefault("ai_choices", {})
-st.session_state.setdefault("confirmed_batches", set())
-st.session_state.setdefault("last_selected_level", None)
+pythonst.session_state.setdefault("selected_student_name_b", None)  # ← 新增
 
+# 防止 final_pool 被污染
+if not isinstance(st.session_state.final_pool, dict):
+    st.session_state.final_pool = {}
+	
 # ============================================================
 # --- ReportLab Font Setup ---
 # ============================================================
@@ -516,7 +515,10 @@ with st.sidebar:
         for w, d in v.items() if not d["needs_review"]
     )
     confirmed_count = len([k for k in st.session_state.confirmed_batches if k.endswith(f"||{selected_level}")])
-    pool_count = sum(len(v) for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}"))
+   	pool_count = sum(
+    len(v) for k, v in st.session_state.final_pool.items()
+    if k.endswith(f"||{selected_level}") and isinstance(v, list)
+)
 
     st.metric(f"{selected_level} 批次數", len(level_batches))
     st.metric("總詞語數", total_words)
