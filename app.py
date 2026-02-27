@@ -718,15 +718,21 @@ if send_mode == "👨‍👩‍👧 按學生寄送":
         st.info(f"⚠️ {selected_level} 沒有學生資料。")
         st.stop()
 
-    # 學生選擇
+    # 學生選擇（使用「學生姓名」欄）
     student_names = df_level["學生姓名"].tolist()
     selected_student = st.selectbox("選擇學生", [""] + student_names)
-    
+
+    if not selected_student:
+        st.stop()
+
+    # 取得學生資料
     row = df_level[df_level["學生姓名"] == selected_student].iloc[0]
-    
+    school = row["學校"]
+    grade = row["年級"]
+
+    # Email 欄位名稱修正
     parent_email = row.get("家長 Email", "")
     cc_email = row.get("老師 Email", "")
-
 
     batch_key = f"{school}||{grade}"
 
@@ -765,6 +771,7 @@ if send_mode == "👨‍👩‍👧 按學生寄送":
             st.success("🎉 已成功寄出！")
         else:
             st.error(f"❌ 寄送失敗：{msg}")
+
 
 # ============================================================
 # --- End of App ---
