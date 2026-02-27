@@ -183,32 +183,18 @@ def compute_batch_readiness(batch_key: str, word_dict: dict):
 # ============================================================
 
 def build_final_pool_for_batch(batch_key: str, word_dict: dict):
-    """
-    將一個批次的所有詞語（原句 + 已選 AI 句）組成題目列表。
-    只在 is_ready == True 時呼叫。
-    """
     school, level = batch_key.split("||")
     questions = []
 
     for word, data in word_dict.items():
         if data["needs_review"]:
-            content = next(
-                (v for k, v in st.session_state.ai_choices.items()
-                 if k.startswith(f"{batch_key}||{word}||")),
+            # 新格式：統一用 {batch_key}||{word}||0 作為 key
+            content = st.session_state.ai_choices.get(
+                f"{batch_key}||{word}||0",
                 data["original"] or ""
             )
         else:
             content = data["original"] or ""
-
-        if content:
-            questions.append({
-                "Word": word,
-                "Content": content,
-                "School": school,
-                "Level": level,
-            })
-
-    return questions
 
 # ============================================================
 # --- PDF Text Rendering Helpers ---
