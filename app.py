@@ -591,66 +591,65 @@ st.divider()
 
 if send_mode == "🤖 AI 句子審核":
     st.subheader("🤖 AI 句子審核")
-    st.caption("✅ 原句詞語已自動就緒。🟨 AI 候選句詞語請選擇一句，全部就緒後即可確認鎖入題庫。")
-
-    # 只顯示選定年級的批次
+    
     level_groups = {k: v for k, v in review_groups.items() if k.endswith(f"||{selected_level}")}
 
     if not level_groups:
-        st.success(f"✅ {selected_level} 目前沒有任何題目。請先在 Google Sheet 的 Review 表新增資料。")
+        st.success(f"✅ {selected_level} 目前沒有任何題目。")
         st.stop()
 
-    # 自動確認沒有 AI 句的批次（全部原句）
-    for batch_key, word_dict in level_groups.items():
-        if batch_key not in st.session_state.confirmed_batches:
-            has_ai = any(d["needs_review"] for d in word_dict.values())
-            if not has_ai:
-                final_qs = build_final_pool_for_batch(batch_key, word_dict)
-                st.session_state.final_pool[batch_key] = final_qs
-                st.session_state.confirmed_batches.add(batch_key)
-
-    # 顯示每個批次
     for batch_key, word_dict in level_groups.items():
         school, level = batch_key.split("||")
         st.markdown(f"### 🏫 {school}（{level}）")
 
-        ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
+        # 檢查這組題目中，是否有任何一個詞語需要 AI 審核
+        has_any_ai_review = any(d["needs_review"] for d in word_dict.values())
 
-        # 顯示每個詞語
-        for word, data in word_dict.items():
-            st.markdown(f"**詞語：{word}**")
-
-            if data["needs_review"]:
-                # AI 候選句
-                ai_list = data["ai"]
-                key_prefix = f"{batch_key}||{word}"
-
-                for idx, ai_sentence in enumerate(ai_list):
-                    key = f"{key_prefix}||{idx}"
-                    selected = st.radio(
-                        f"AI 候選句 {idx+1}",
-                        ["不選", ai_sentence],
-                        index=1 if st.session_state.ai_choices.get(key) else 0,
-                        key=key
-                    )
-
-                    if selected != "不選":
-                        st.session_state.ai_choices[key] = ai_sentence
-                    else:
-                        st.session_state.ai_choices.pop(key, None)
-
-            else:
-                # 原句
-                st.success(f"原句：{data['original']}")
-
-        # 批次是否可確認
-        if is_ready and batch_key not in st.session_state.confirmed_batches:
-            if st.button(f"🔒 確認並鎖定題庫：{school}（{level}）", key=f"confirm_{batch_key}"):
+        if not has_any_ai_review:
+            # --- 情況 1：全部都是原句，不需要審核 ---
+            st.info(f"💡 這次 **{school}** 學校句子沒有需要審核，請直接到「按學校預覽下載」或「按學生寄送」使用工作紙。")
+            
+            # 自動確保這些題目已進入 final_pool
+            if batch_key not in st.session_state.confirmed_batches:
                 final_qs = build_final_pool_for_batch(batch_key, word_dict)
                 st.session_state.final_pool[batch_key] = final_qs
                 st.session_state.confirmed_batches.add(batch_key)
-                st.success("已鎖定題庫！")
-                st.rerun()
+        
+        else:
+            # --- 情況 2：有 AI 句需要審核 ---
+            ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
+            
+            # 只顯示需要審核的詞語
+            for word, data in word_dict.items():
+                if data["needs_review"]:
+                    st.markdown(f"**詞語：{word}**")
+                    ai_list = data["ai"]
+                    key_prefix = f"{batch_key}||{word}"
+
+                    for idx, ai_sentence in enumerate(ai_list):
+                        key = f"{key_prefix}||{idx}"
+                        selected = st.radio(
+                            f"AI 候選句 {idx+1}",
+                            ["不選", ai_sentence],
+                            index=1 if st.session_state.ai_choices.get(key) else 0,
+                            key=key
+                        )
+                        if selected != "不選":
+                            st.session_state.ai_choices[key] = ai_sentence
+                        else:
+                            st.session_state.ai_choices.pop(key, None)
+                # 原句在這裡被隱藏了，不顯示
+
+            # 顯示確認按鈕
+            if is_ready and batch_key not in st.session_state.confirmed_batches:
+                if st.button(f"🔒 確認並鎖定題庫：{school}", key=f"confirm_{batch_key}"):
+                    final_qs = build_final_pool_for_batch(batch_key, word_dict)
+                    st.session_state.final_pool[batch_key] = final_qs
+                    st.session_state.confirmed_batches.add(batch_key)
+                    st.success("已鎖定題庫！")
+                    st.rerun()
+            elif batch_key in st.session_state.confirmed_batches:
+                st.success("✅ 此批次已完成審核並鎖定。")
 
         st.divider()
 
