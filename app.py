@@ -98,7 +98,8 @@ def load_sheet(sheet_name: str) -> pd.DataFrame:
 
         df.columns = [c.strip() for c in df.columns]
         for col in df.columns:
-            df[col] = df[col].astype(str).strip()
+            df[col] = df[col].astype(str).str.strip()
+
 
         return df
 
