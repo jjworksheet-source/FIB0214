@@ -589,73 +589,110 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 # --- 4b. TEACHER ANSWER PDF ---
 # ============================================================
 def create_answer_pdf(school_name, level, questions, student_name=None):
+    """
+    教師版：只輸出「詞語表（題目順序）」，
+    依題目順序列出所有 Word，紅色顯示。
+    """
     from reportlab.pdfgen import canvas as rl_canvas
     from reportlab.lib.colors import red as RED
 
     bio = io.BytesIO()
     c = rl_canvas.Canvas(bio, pagesize=letter)
-    _, page_height = letter
-    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-    max_width = _get_max_width()
-    cur_y = page_height - 60
+    page_width, page_height = letter
+    font_name = CHINESE_FONT if CHINESE_FONT else "Helvetica"
 
-    # Title
+    left_m   = 60
+    line_h   = 26
+    cur_y    = page_height - 80
+
+    # 標題：詞語清單（題目順序）
     c.setFont(font_name, 22)
     c.setFillColorRGB(0, 0, 0)
-    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
-            else f"{school_name} ({level}) - 校本填充工作紙"
-    c.drawString(PDF_LEFT_NUM, cur_y, title)
-    cur_y -= 30
+    title = "詞語清單（題目順序）"
+    c.drawString(left_m, cur_y, title)
+    cur_y -= 40
 
-    # Answer key subtitle
-    c.setFont(font_name, 16)
-    c.setFillColor(RED)
-    c.drawString(PDF_LEFT_NUM, cur_y, "教師版答案 (Answer Key)")
+    c.setFont(font_name, 18)
+
+    for idx, row in enumerate(questions, start=1):
+        word = str(row.get("Word", "")).strip()
+
+        # 換頁檢查
+        if cur_y < 60:
+            c.showPage()
+            cur_y = page_height - 80
+            c.setFont(font_name, 22)
+            c.setFillColorRGB(0, 0, 0)
+            c.drawString(left_m, cur_y, "詞語清單（題目順序）（續）")
+            cur_y -= 40
+            c.setFont(font_name, 18)
+
+        # 題號
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(left_m, cur_y, f"{idx}. ")
+
+        # 詞語（紅色）
+        c.setFillColor(RED)
+        c.drawString(left_m + 40, cur_y, word)
+
+        # 恢復為黑色，準備下一行
+        c.setFillColorRGB(0, 0, 0)
+        cur_y -= line_h
+
+    c.save()
+    bio.seek(0)
+    return bio
+
+    # ── 詞語表（答案，紅色）────────────────────────────────
+    c.showPage()
+    cur_y = page_height - 60
+
+    c.setFont(font_name, 20)
     c.setFillColorRGB(0, 0, 0)
-    cur_y -= 30
-
-    # Date
-    c.setFont(font_name, PDF_FONT_SIZE)
-    c.drawString(PDF_LEFT_NUM, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
-    cur_y -= 30
+    c.drawString(left_m, cur_y, "詞語表（題目順序）")
+    cur_y -= 40
 
     for idx, row in enumerate(questions):
-        content = row['Content']
-        answer  = str(row.get('Word', '')).strip()
-
-        content = re.sub(
-            r'【】(.*?)【】',
-            lambda m: f'<red>【{m.group(1)}】</red>',
-            content
-        )
-        if answer:
-            content = re.sub(
-                r'【([^】]+)】',
-                f'<red>【{answer}】</red>',
-                content
-            )
-        else:
-            content = re.sub(
-                r'【([^】]+)】',
-                lambda m: f'<red>【{m.group(1)}】</red>',
-                content
-            )
-
-        if cur_y - PDF_LINE_HEIGHT < 60:
+        word = str(row.get('Word', '')).strip()
+        if cur_y < 60:
             c.showPage()
             cur_y = page_height - 60
+            c.setFont(font_name, 20)
+            c.setFillColorRGB(0, 0, 0)
+            c.drawString(left_m, cur_y, "詞語表（題目順序）（續）")
+            cur_y -= 40
 
-        c.setFont(font_name, PDF_FONT_SIZE)
+        c.setFont(font_name, 18)
         c.setFillColorRGB(0, 0, 0)
-        c.drawString(PDF_LEFT_NUM, cur_y, f"{idx+1}.")
-        cur_y = _draw_answer_line_wrapped(
-            c, PDF_TEXT_START, cur_y, content,
-            font_name, PDF_FONT_SIZE, max_width,
-            underline_offset=2, line_height=PDF_LINE_HEIGHT
-        )
+        c.drawString(left_m, cur_y, f"{idx+1}.  ")
+        c.setFillColor(RED)
+        c.drawString(left_m + 45, cur_y, word)
+        c.setFillColorRGB(0, 0, 0)
+        cur_y -= 26
 
-    words = [str(row.get('Word', '')).strip() for row in questions]
-    _draw_word_list_page(c, words, font_name, title="詞語表（答案）", word_color=RED)
+    c.save()
+    bio.seek(0)
+    return bio
+    # 3. 詞語表 (答案版)
+    c.showPage()
+    cur_y = page_height - 60
+    c.setFont(font_name, 20)
+    c.setFillColorRGB(0, 0, 0)
+    c.drawString(left_m, cur_y, "詞語表 (答案)")
+    cur_y -= 40
+
+    for idx, row in enumerate(questions):
+        word = str(row.get('Word', '')).strip()
+        if cur_y < 60:
+            c.showPage()
+            cur_y = page_height - 60
+        
+        c.setFont(font_name, 18)
+        c.setFillColorRGB(0, 0, 0)
+        c.drawString(left_m, cur_y, f"{idx+1}. ")
+        c.setFillColor(RED)
+        c.drawString(left_m + 40, cur_y, word)
+        cur_y -= 25
 
     c.save()
     bio.seek(0)
