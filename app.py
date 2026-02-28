@@ -714,33 +714,43 @@ with tab_email:
     st.subheader("✉️ 寄送郵件")
 
     if student_df.empty:
-        with st.container(border=True):
-            st.error("❌ 學生資料表為空，無法寄送。")
-            st.info("請檢查 Google Sheets 中的「學生資料」工作表是否正確設定。")
+        st.error("❌ 學生資料表為空，無法寄送。")
         st.stop()
 
-    df_level = student_df[student_df["年級"].astype(str) == selected_level]
+    # --- 優化點 1：聯動篩選 ---
+    # 根據側邊欄選中的「學校」和「年級」精確過濾學生名單
+    df_filtered = student_df[
+        (student_df["學校"].astype(str) == selected_school) & 
+        (student_df["年級"].astype(str) == selected_level)
+    ]
 
-    if df_level.empty:
+    if df_filtered.empty:
         with st.container(border=True):
-            st.warning(f"⚠️ {selected_level} 沒有學生資料。")
-            st.info("請確認該年級的學生資料是否存在於「學生資料」工作表中。")
+            st.warning(f"⚠️ 在 {selected_school} 的 {selected_level} 年級中找不到學生資料。")
+            st.info("請確認「學生資料」工作表中的學校名稱與年級是否完全匹配。")
         st.stop()
 
+    # --- 優化點 2：顯示過濾後的名單 ---
     with st.container(border=True):
-        st.markdown("### 👤 選擇學生")
-        student_names = df_level["學生姓名"].tolist()
+        st.markdown(f"### 👤 選擇學生 ({selected_school} - {selected_level})")
+        
+        # 排序學生姓名，讓找人更直覺
+        student_names = sorted(df_filtered["學生姓名"].tolist())
+        
         selected_student = st.selectbox(
-            "選擇學生",
+            "請輸入或選擇學生姓名",
             [""] + student_names,
-            help="選擇要寄送工作紙的學生"
+            help="提示：點擊後直接輸入姓名可快速搜尋",
+            key="student_selector_main"
         )
 
     if not selected_student:
-        st.info("👆 請從上方選擇一位學生")
+        st.info("👆 請從上方選擇一位學生以開始寄送流程")
         st.stop()
 
-    row = df_level[df_level["學生姓名"] == selected_student].iloc[0]
+    # 獲取選中學生的詳細資料
+    row = df_filtered[df_filtered["學生姓名"] == selected_student].iloc[0]
+    # ... (後續的 PDF 生成與寄送邏輯保持不變)
     school = row["學校"]
     grade = row["年級"]
     parent_email = row.get("家長 Email", "")
