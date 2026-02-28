@@ -672,9 +672,14 @@ with tab_preview:
             st.markdown(f"### 🏫 {school}（{level}）")
             st.caption(f"共 {len(questions)} 題")
 
+            # --- 新增：隨機排序邏輯 ---
+            # 使用 batch_key 作為快取鍵，確保同一個批次在本次 Session 中順序固定，但點擊側邊欄「打亂題目」會更新
+            shuffled_qs = get_shuffled_questions(questions, f"preview_{batch_key}")
+
             with st.spinner("正在生成 PDF..."):
-                pdf_bytes = create_pdf(school, level, questions)
-                answer_pdf_bytes = create_answer_pdf(school, level, questions)
+                # 使用隨機排序後的 shuffled_qs 生成 PDF
+                pdf_bytes = create_pdf(school, level, shuffled_qs)
+                answer_pdf_bytes = create_answer_pdf(school, level, shuffled_qs)
 
             col1, col2 = st.columns(2)
 
