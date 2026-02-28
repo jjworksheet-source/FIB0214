@@ -115,18 +115,18 @@ def load_students():
 
 @st.cache_data(ttl=60)
 def load_standby():
-    """載入 Standby 工作表（題庫）"""
+    """載入 standby 工作表（題庫）"""
     try:
-        return load_sheet("Standby")
+        return load_sheet("standby")
     except Exception:
         return pd.DataFrame()
 
 
 def update_status_to_used(row_indices):
-    """更新 Standby 工作表中句子的狀態為已使用"""
+    """更新 standby 工作表中句子的狀態為已使用"""
     try:
         sh = client.open_by_key(SHEET_ID)
-        ws = sh.worksheet("Standby")
+        ws = sh.worksheet("standby")
         for idx in row_indices:
             gs_row = idx + 2  # pandas 0-based → Google Sheets 1-based (header = row 1)
             ws.update_cell(gs_row, 8, "已使用")  # Status 是第 8 欄
@@ -135,12 +135,12 @@ def update_status_to_used(row_indices):
         return False, str(e)
 
 # ============================================================
-# --- Standby Parser ---
+# --- standby Parser ---
 # ============================================================
 
 def parse_standby_table(df: pd.DataFrame):
     """
-    解析 Standby 表格
+    解析 standby 表格
     欄位：ID, School, level, Word, Type, Content, Answer, Status, Entry_Date
     跳過 Status 為「已使用」的句子
     """
@@ -173,7 +173,7 @@ def parse_standby_table(df: pd.DataFrame):
 # ============================================================
 
 def compute_batch_readiness(batch_key: str, word_dict: dict):
-    """所有句子都已就緒（Standby 已預先審核）"""
+    """所有句子都已就緒（standby 已預先審核）"""
     ready_words = []
     for word, data in word_dict.items():
         if data.get("is_ready") and data.get("content"):
@@ -185,7 +185,7 @@ def compute_batch_readiness(batch_key: str, word_dict: dict):
 # ============================================================
 
 def build_final_pool_for_batch(batch_key: str, word_dict: dict):
-    """直接使用 Standby 中所有可用句子"""
+    """直接使用 standby 中所有可用句子"""
     school, level = batch_key.split("||")
     questions = []
     for word, data in word_dict.items():
@@ -598,7 +598,7 @@ with tab_lock:
     if not level_groups:
         with st.container(border=True):
             st.success(f"✅ {selected_level} 目前沒有任何可用題目。")
-            st.info("請確認 Google Sheets 中的 Standby 工作表是否有 Status 為 Ready 的資料，或嘗試點擊側邊欄的「更新資料」按鈕。")
+            st.info("請確認 Google Sheets 中的 standby 工作表是否有 Status 為 Ready 的資料，或嘗試點擊側邊欄的「更新資料」按鈕。")
         st.stop()
 
     for batch_key, word_dict in level_groups.items():
