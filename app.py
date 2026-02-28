@@ -79,8 +79,8 @@ try:
     creds = Credentials.from_service_account_info(
         key_dict,
         scopes=[
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.file"
         ]
     )
     client = gspread.authorize(creds)
@@ -135,11 +135,13 @@ def write_used_sentences(sentences_data):
         sh = client.open_by_key(SHEET_ID)
 
         # 嘗試打開已使用工作表，如果不存在則創建
+        sheet_exists = True
         try:
             ws = sh.worksheet("已使用")
         except Exception:
+            sheet_exists = False
             # 創建新工作表
-            ws = sh.add_worksheet("已使用", rows=1, cols=5)
+            ws = sh.add_worksheet("已使用", rows=1000, cols=5)
             # 設定標題行
             ws.update('A1:E1', [['學校', '年級', '詞語', '句子', '使用日期']])
 
@@ -157,15 +159,14 @@ def write_used_sentences(sentences_data):
             ]
             rows_to_add.append(row)
 
-        # 找出現有的最後一行
-        if ws.row_count > 1:
-            last_row = ws.row_count + 1
-        else:
-            last_row = 2
+        # 讀取現有所有資料找出正確的下一行
+        all_values = ws.get_all_values()
+        next_row = len(all_values) + 1  # 自動計算下一行
 
         # 寫入資料
         if rows_to_add:
-            ws.update(f'A{last_row}:E{last_row + len(rows_to_add) - 1}', rows_to_add)
+            cell_range = f'A{next_row}:E{next_row + len(rows_to_add) - 1}'
+            ws.update(cell_range, rows_to_add)
 
         return True, f"成功寫入 {len(rows_to_add)} 筆記錄"
 
@@ -792,15 +793,13 @@ with tab_review:
                                         })
 
                                     # 寫入到「已使用」工作表
-                                    # 寫入到「已使用」工作表（除錯用）
-                                    st.write(f"🔍 DEBUG: 準備寫入 {len(sentences_to_save)} 個句子")
                                     if sentences_to_save:
                                         write_ok, write_msg = write_used_sentences(sentences_to_save)
-                                        st.write(f"🔍 DEBUG: 寫入結果 - 成功={write_ok}, 訊息={write_msg}")
                                         if write_ok:
-                                            st.toast(f"已記錄 {len(sentences_to_save)} 個使用記錄到 Google Sheets", icon="📝")
+                                            st.success(f"✅ 已記錄 {len(sentences_to_save)} 個句子到「已使用」工作表")
                                         else:
                                             st.error(f"❌ 寫入失敗：{write_msg}")
+                                            st.info("💡 請確保 Google Service Account 有試算表的編輯權限")
 
                                 st.success("✅ 已成功鎖定題庫並記錄使用！")
                                 st.rerun()
