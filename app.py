@@ -437,80 +437,113 @@ def display_pdf_as_images(pdf_bytes):
 # --- Sidebar Controls ---
 # ============================================================
 
-student_df = load_students()
-review_df = load_review()
-review_groups = parse_review_table(review_df)
+# 預先載入資料（加入載入狀態）
+with st.spinner("正在載入資料，請稍候..."):
+    student_df = load_students()
+    review_df = load_review()
+    review_groups = parse_review_table(review_df)
 
 with st.sidebar:
     st.header("⚙️ 控制面板")
 
-    col_r, col_s = st.columns(2)
+    # === 控制區塊 ===
+    with st.container(border=True):
+        col_r, col_s = st.columns(2)
 
-    with col_r:
-        if st.button("🔄 更新資料", use_container_width=True):
-            load_review.clear()
-            load_students.clear()
-            st.session_state.final_pool = {}
-            st.session_state.ai_choices = {}
-            st.session_state.confirmed_batches = set()
-            st.session_state.shuffled_cache = {}
-            st.rerun()
+        with col_r:
+            if st.button("🔄 更新資料", use_container_width=True, help="點擊重新載入 Google Sheets 資料"):
+                with st.spinner("正在同步最新資料..."):
+                    load_review.clear()
+                    load_students.clear()
+                    st.session_state.final_pool = {}
+                    st.session_state.ai_choices = {}
+                    st.session_state.confirmed_batches = set()
+                    st.session_state.shuffled_cache = {}
+                    st.rerun()
 
-    with col_s:
-        if st.button("🔀 打亂題目", use_container_width=True):
-            st.session_state.shuffled_cache = {}
-            st.rerun()
-
-    st.divider()
-
-    all_levels = sorted(review_df["年級"].astype(str).unique().tolist()) if not review_df.empty else ["P1"]
-    st.subheader("🎓 年級")
-    selected_level = st.radio("選擇年級", all_levels, index=0, label_visibility="collapsed")
-
-    if st.session_state.last_selected_level != selected_level:
-        st.session_state.last_selected_level = selected_level
-        st.session_state.selected_student_name_b = None
+        with col_s:
+            if st.button("🔀 打亂題目", use_container_width=True, help="重新隨機排序題目順序"):
+                st.session_state.shuffled_cache = {}
+                st.rerun()
 
     st.divider()
 
-    st.subheader("📬 模式")
-    send_mode = st.radio(
-        "選擇模式",
-        ["🤖 AI 句子審核", "📄 按學校預覽下載", "👨‍👩‍👧 按學生寄送"],
-        index=0,
-        label_visibility="collapsed"
-    )
+    # === 篩選區塊 ===
+    with st.container(border=True):
+        all_levels = sorted(review_df["年級"].astype(str).unique().tolist()) if not review_df.empty else ["P1"]
+        st.subheader("🎓 選擇年級")
+        selected_level = st.selectbox(
+            "年級",
+            all_levels,
+            index=0,
+            label_visibility="collapsed",
+            help="選擇要處理的工作表年級"
+        )
+
+        if st.session_state.last_selected_level != selected_level:
+            st.session_state.last_selected_level = selected_level
+            st.session_state.selected_student_name_b = None
 
     st.divider()
 
-    st.subheader("📊 資料概覽")
+    # === 狀態儀表板 ===
+    with st.container(border=True):
+        st.subheader("📊 資料概覽")
 
-    level_batches = [k for k in review_groups if k.endswith(f"||{selected_level}")]
-    total_words = sum(len(v) for k, v in review_groups.items() if k.endswith(f"||{selected_level}"))
-    ai_words = sum(
-        1 for k, v in review_groups.items() if k.endswith(f"||{selected_level}")
-        for w, d in v.items() if d["needs_review"]
-    )
-    ready_words_cnt = sum(
-        1 for k, v in review_groups.items() if k.endswith(f"||{selected_level}")
-        for w, d in v.items() if not d["needs_review"]
-    )
-    confirmed_count = len([k for k in st.session_state.confirmed_batches if k.endswith(f"||{selected_level}")])
-    pool_count = sum(
-        len(v) for k, v in st.session_state.final_pool.items()
-        if k.endswith(f"||{selected_level}") and isinstance(v, list)
-    )
+        level_batches = [k for k in review_groups if k.endswith(f"||{selected_level}")]
+        total_words = sum(len(v) for k, v in review_groups.items() if k.endswith(f"||{selected_level}"))
+        ai_words = sum(
+            1 for k, v in review_groups.items() if k.endswith(f"||{selected_level}")
+            for w, d in v.items() if d["needs_review"]
+        )
+        ready_words_cnt = sum(
+            1 for k, v in review_groups.items() if k.endswith(f"||{selected_level}")
+            for w, d in v.items() if not d["needs_review"]
+        )
+        confirmed_count = len([k for k in st.session_state.confirmed_batches if k.endswith(f"||{selected_level}")])
+        pool_count = sum(
+            len(v) for k, v in st.session_state.final_pool.items()
+            if k.endswith(f"||{selected_level}") and isinstance(v, list)
+        )
 
-    st.metric(f"{selected_level} 批次數", len(level_batches))
-    st.metric("總詞語數", total_words)
-    st.metric("🟨 待選 AI 句", ai_words)
-    st.metric("✅ 已就緒（原句）", ready_words_cnt)
-    st.metric("已確認批次", confirmed_count)
-    st.metric("題庫已鎖定題目", pool_count)
+        # 使用更視覺化的指標顯示
+        col_stat1, col_stat2 = st.columns(2)
+        with col_stat1:
+            st.metric("批次數", len(level_batches))
+            st.metric("待選 AI 句", ai_words, delta="⚠️ 待處理" if ai_words > 0 else None)
+        with col_stat2:
+            st.metric("總詞語", total_words)
+            st.metric("已就緒", ready_words_cnt, delta="✅ 完成" if ready_words_cnt > 0 else None)
 
-    if not student_df.empty and "狀態" in student_df.columns:
-        active_count = (student_df["狀態"] == "Y").sum()
-        st.metric("啟用學生數", int(active_count))
+        st.metric("已鎖定題庫", pool_count)
+        if not student_df.empty and "狀態" in student_df.columns:
+            active_count = (student_df["狀態"] == "Y").sum()
+            st.metric("啟用學生", int(active_count))
+
+    st.divider()
+
+    # === 說明區塊 ===
+    with st.expander("📖 使用說明", expanded=False):
+        st.markdown("""
+        **操作流程：**
+
+        1. **AI 審核**：選擇 AI 生成的句子或輸入自定義句子
+        2. **鎖定題庫**：確認審核完成後鎖定題目
+        3. **預覽下載**：生成並下載工作紙 PDF
+        4. **寄送郵件**：將工作紙寄送給學生家長
+
+        **小提示：**
+        - 使用【詞語】標記需要填寫的部分
+        - 寄送前請確認學生資料正確
+        """)
+
+    # === 系統狀態 ===
+    with st.container(border=True):
+        st.caption("🔗 系統狀態")
+        if not student_df.empty:
+            st.success("✅ Google Sheets 已連接")
+        else:
+            st.warning("⚠️ 請檢查資料連接")
 
 # ============================================================
 # --- Shuffle Helper ---
@@ -536,156 +569,209 @@ PDF_LINE_HEIGHT = 26
 PDF_FONT_SIZE = 18
 
 # ============================================================
-# --- Mode A: AI 句子審核 ---
+# --- 頂部標籤頁導航 ---
 # ============================================================
 
 st.divider()
 
-if send_mode == "🤖 AI 句子審核":
+# 建立三個標籤頁
+tab_review, tab_preview, tab_email = st.tabs([
+    "🤖 AI 句子審核",
+    "📄 預覽下載",
+    "✉️ 寄送郵件"
+])
+
+# ============================================================
+# --- 標籤頁 1: AI 句子審核 ---
+# ============================================================
+
+with tab_review:
     st.subheader("🤖 AI 句子審核")
 
     level_groups = {k: v for k, v in review_groups.items() if k.endswith(f"||{selected_level}")}
 
     if not level_groups:
-        st.success(f"✅ {selected_level} 目前沒有任何題目。")
+        with st.container(border=True):
+            st.success(f"✅ {selected_level} 目前沒有任何題目。")
+            st.info("請確認 Google Sheets 中的資料是否正確，或嘗試點擊側邊欄的「更新資料」按鈕。")
         st.stop()
 
     for batch_key, word_dict in level_groups.items():
-        school, level = batch_key.split("||")
-        st.markdown(f"### 🏫 {school}（{level}）")
+        with st.container(border=True):
+            school, level = batch_key.split("||")
+            st.markdown(f"### 🏫 {school}（{level}）")
 
-        has_any_ai_review = any(d["needs_review"] for d in word_dict.values())
+            has_any_ai_review = any(d["needs_review"] for d in word_dict.values())
 
-        if not has_any_ai_review:
-            st.info(f"💡 這次 **{school}** 學校句子沒有需要審核，請直接到「按學校預覽下載」或「按學生寄送」使用工作紙。")
-            if batch_key not in st.session_state.confirmed_batches:
-                final_qs = build_final_pool_for_batch(batch_key, word_dict)
-                st.session_state.final_pool[batch_key] = final_qs
-                st.session_state.confirmed_batches.add(batch_key)
-
-        else:
-            ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
-
-            for word, data in word_dict.items():
-                if data["needs_review"]:
-                    st.markdown(f"#### 詞語：{word}")
-                    ai_list = data["ai"]
-                    key_radio = f"{batch_key}||{word}||choice"
-                    key_custom = f"{batch_key}||{word}||custom"
-
-                    options = ai_list + ["✏️ 自行輸入句子"]
-
-                    current = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", None)
-                    if current in ai_list:
-                        default_index = ai_list.index(current)
-                    elif current and current not in ai_list:
-                        default_index = len(options) - 1
-                    else:
-                        default_index = 0
-
-                    selected = st.radio(
-                        f"請為「{word}」選擇最合適的句子：",
-                        options,
-                        index=default_index,
-                        key=key_radio
-                    )
-
-                    if selected == "✏️ 自行輸入句子":
-                        prev_custom = st.session_state.get(key_custom, "")
-                        custom_input = st.text_input(
-                            f"請輸入「{word}」的自定義句子（請用【】詞語【】標示）：",
-                            value=prev_custom,
-                            key=key_custom,
-                            placeholder="例如：小明【定期】到牙科診所檢查牙齒。"
-                        )
-                        if custom_input.strip():
-                            st.session_state.ai_choices[f"{batch_key}||{word}||0"] = custom_input.strip()
-                        else:
-                            st.session_state.ai_choices.pop(f"{batch_key}||{word}||0", None)
-                    else:
-                        st.session_state.ai_choices[f"{batch_key}||{word}||0"] = selected
-                        if key_custom in st.session_state:
-                            del st.session_state[key_custom]
-
-            if pending_words:
-                st.warning(f"⚠️ 以下詞語尚未選擇句子：{', '.join(pending_words)}")
-
-            if is_ready and batch_key not in st.session_state.confirmed_batches:
-                if st.button(f"🔒 確認並鎖定題庫：{school}", key=f"confirm_{batch_key}"):
+            if not has_any_ai_review:
+                st.info(f"💡 這次 **{school}** 學校句子沒有需要審核，請切換到「預覽下載」或「寄送郵件」使用工作紙。")
+                if batch_key not in st.session_state.confirmed_batches:
                     final_qs = build_final_pool_for_batch(batch_key, word_dict)
                     st.session_state.final_pool[batch_key] = final_qs
                     st.session_state.confirmed_batches.add(batch_key)
-                    st.success("✅ 已鎖定題庫！")
-                    st.rerun()
-            elif batch_key in st.session_state.confirmed_batches:
-                st.success("✅ 此批次已完成審核並鎖定。")
 
-        st.divider()
+            else:
+                ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
+
+                for word, data in word_dict.items():
+                    if data["needs_review"]:
+                        with st.expander(f"📝 詞語：{word}", expanded=True):
+                            ai_list = data["ai"]
+                            key_radio = f"{batch_key}||{word}||choice"
+                            key_custom = f"{batch_key}||{word}||custom"
+
+                            options = ai_list + ["✏️ 自行輸入句子"]
+
+                            current = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", None)
+                            if current in ai_list:
+                                default_index = ai_list.index(current)
+                            elif current and current not in ai_list:
+                                default_index = len(options) - 1
+                            else:
+                                default_index = 0
+
+                            selected = st.radio(
+                                "請選擇最合適的句子：",
+                                options,
+                                index=default_index,
+                                key=key_radio,
+                                label_visibility="collapsed"
+                            )
+
+                            if selected == "✏️ 自行輸入句子":
+                                prev_custom = st.session_state.get(key_custom, "")
+                                custom_input = st.text_input(
+                                    "請輸入自定義句子（使用【】詞語【】標示）：",
+                                    value=prev_custom,
+                                    key=key_custom,
+                                    placeholder="例如：小明【定期】到牙科診所檢查牙齒。",
+                                    help="請用【】符號標示需要填寫的詞語"
+                                )
+                                if custom_input.strip():
+                                    st.session_state.ai_choices[f"{batch_key}||{word}||0"] = custom_input.strip()
+                                else:
+                                    st.session_state.ai_choices.pop(f"{batch_key}||{word}||0", None)
+                            else:
+                                st.session_state.ai_choices[f"{batch_key}||{word}||0"] = selected
+                                if key_custom in st.session_state:
+                                    del st.session_state[key_custom]
+
+                if pending_words:
+                    st.warning(f"⚠️ 以下詞語尚未選擇句子：{', '.join(pending_words)}")
+
+                # 確認鎖定區塊
+                if is_ready and batch_key not in st.session_state.confirmed_batches:
+                    with st.container(border=True):
+                        st.markdown("### 🔒 確認並鎖定題庫")
+                        st.info("請確認所有詞語都已選擇句子後，再鎖定題庫。鎖定後將無法修改。")
+
+                        # 二次確認機制
+                        confirm_checkbox = st.checkbox(
+                            "我確認已完成所有詞語的審核，同意鎖定題庫",
+                            key=f"confirm_check_{batch_key}"
+                        )
+
+                        if confirm_checkbox:
+                            if st.button(f"✅ 確認並鎖定題庫：{school}", key=f"confirm_{batch_key}", type="primary"):
+                                with st.spinner("正在鎖定題庫..."):
+                                    final_qs = build_final_pool_for_batch(batch_key, word_dict)
+                                    st.session_state.final_pool[batch_key] = final_qs
+                                    st.session_state.confirmed_batches.add(batch_key)
+                                st.success("✅ 已成功鎖定題庫！")
+                                st.rerun()
+                        else:
+                            st.caption("請勾選上方確認方塊以啟用鎖定按鈕")
+
+                elif batch_key in st.session_state.confirmed_batches:
+                    st.success("✅ 此批次已完成審核並鎖定。")
 
 # ============================================================
-# --- Mode B: 按學校預覽下載 ---
+# --- 標籤頁 2: 預覽下載 ---
 # ============================================================
 
-if send_mode == "📄 按學校預覽下載":
-    st.subheader("📄 按學校預覽下載")
+with tab_preview:
+    st.subheader("📄 預覽下載")
 
     level_batches = {k: v for k, v in st.session_state.final_pool.items() if k.endswith(f"||{selected_level}")}
 
     if not level_batches:
-        st.info("⚠️ 尚未有任何批次完成 AI 審核並鎖定題庫。")
+        with st.container(border=True):
+            st.warning("⚠️ 尚未有任何批次完成 AI 審核並鎖定題庫。")
+            st.info("請先到「AI 句子審核」標籤頁完成審核並鎖定題庫後，再回到此處下載工作紙。")
         st.stop()
 
     for batch_key, questions in level_batches.items():
-        school, level = batch_key.split("||")
-        st.markdown(f"### 🏫 {school}（{level}）")
+        with st.container(border=True):
+            school, level = batch_key.split("||")
+            st.markdown(f"### 🏫 {school}（{level}）")
+            st.caption(f"共 {len(questions)} 題")
 
-        pdf_bytes = create_pdf(school, level, questions)
-        answer_pdf_bytes = create_answer_pdf(school, level, questions)
+            # 生成 PDF（加入載入狀態）
+            with st.spinner("正在生成 PDF..."):
+                pdf_bytes = create_pdf(school, level, questions)
+                answer_pdf_bytes = create_answer_pdf(school, level, questions)
 
-        col1, col2 = st.columns(2)
+            # 下載按鈕區塊
+            col1, col2 = st.columns(2)
 
-        with col1:
-            st.download_button(
-                label="⬇️ 下載學生版 PDF",
-                data=pdf_bytes,
-                file_name=f"{school}_{level}_worksheet.pdf",
-                mime="application/pdf"
-            )
+            with col1:
+                st.download_button(
+                    label="⬇️ 下載學生版 PDF",
+                    data=pdf_bytes,
+                    file_name=f"{school}_{level}_worksheet.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    help="下載學生版本的工作紙 PDF"
+                )
 
-        with col2:
-            st.download_button(
-                label="⬇️ 下載教師版 PDF（答案）",
-                data=answer_pdf_bytes,
-                file_name=f"{school}_{level}_answers.pdf",
-                mime="application/pdf"
-            )
+            with col2:
+                st.download_button(
+                    label="⬇️ 下載教師版 PDF（答案）",
+                    data=answer_pdf_bytes,
+                    file_name=f"{school}_{level}_answers.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    help="下載包含答案的教師版 PDF"
+                )
 
-        with st.expander("📘 預覽學生版 PDF"):
-            display_pdf_as_images(pdf_bytes)
-
-        st.divider()
+            # 預覽區塊
+            with st.expander("📘 預覽學生版 PDF", expanded=False):
+                display_pdf_as_images(pdf_bytes)
 
 # ============================================================
-# --- Mode C: 按學生寄送 ---
+# --- 標籤頁 3: 寄送郵件 ---
 # ============================================================
 
-if send_mode == "👨‍👩‍👧 按學生寄送":
-    st.subheader("👨‍👩‍👧 按學生寄送")
+with tab_email:
+    st.subheader("✉️ 寄送郵件")
 
     if student_df.empty:
-        st.error("❌ 學生資料表為空，無法寄送。")
+        with st.container(border=True):
+            st.error("❌ 學生資料表為空，無法寄送。")
+            st.info("請檢查 Google Sheets 中的「學生資料」工作表是否正確設定。")
         st.stop()
 
     df_level = student_df[student_df["年級"].astype(str) == selected_level]
 
     if df_level.empty:
-        st.info(f"⚠️ {selected_level} 沒有學生資料。")
+        with st.container(border=True):
+            st.warning(f"⚠️ {selected_level} 沒有學生資料。")
+            st.info("請確認該年級的學生資料是否存在於「學生資料」工作表中。")
         st.stop()
 
-    student_names = df_level["學生姓名"].tolist()
-    selected_student = st.selectbox("選擇學生", [""] + student_names)
+    # 學生選擇區塊
+    with st.container(border=True):
+        st.markdown("### 👤 選擇學生")
+
+        student_names = df_level["學生姓名"].tolist()
+        selected_student = st.selectbox(
+            "選擇學生",
+            [""] + student_names,
+            help="選擇要寄送工作紙的學生"
+        )
 
     if not selected_student:
+        st.info("👆 請從上方選擇一位學生")
         st.stop()
 
     row = df_level[df_level["學生姓名"] == selected_student].iloc[0]
@@ -698,38 +784,79 @@ if send_mode == "👨‍👩‍👧 按學生寄送":
     batch_key = f"{school}||{grade}"
 
     if batch_key not in st.session_state.final_pool:
-        st.error("⚠️ 此學生所屬批次尚未完成 AI 審核並鎖定題庫。")
+        with st.container(border=True):
+            st.error("⚠️ 此學生所屬批次尚未完成 AI 審核並鎖定題庫。")
+            st.info("請先到「AI 句子審核」標籤頁完成審核並鎖定題庫。")
         st.stop()
 
     questions = st.session_state.final_pool[batch_key]
 
-    pdf_bytes = create_pdf(school, grade, questions, student_name=selected_student)
+    # PDF 生成區塊
+    with st.container(border=True):
+        st.markdown("### 📄 工作紙預覽")
 
-    st.download_button(
-        label="⬇️ 下載學生版 PDF",
-        data=pdf_bytes,
-        file_name=f"{selected_student}_worksheet.pdf",
-        mime="application/pdf"
-    )
+        with st.spinner("正在生成 PDF..."):
+            pdf_bytes = create_pdf(school, grade, questions, student_name=selected_student)
+
+        st.download_button(
+            label="⬇️ 下載學生版 PDF",
+            data=pdf_bytes,
+            file_name=f"{selected_student}_worksheet.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
 
     st.divider()
 
-    st.markdown("### ✉️ 寄送工作紙至家長電郵")
+    # 郵件寄送區塊
+    with st.container(border=True):
+        st.markdown("### ✉️ 寄送工作紙")
 
-    if st.button("📨 寄出工作紙"):
-        ok, msg = send_email_with_pdf(
-            parent_email,
-            selected_student,
-            school,
-            grade,
-            pdf_bytes,
-            cc_email=cc_email
+        # 顯示寄送資訊摘要
+        with st.expander("📋 寄送資訊摘要", expanded=True):
+            st.markdown(f"""
+            - **學生姓名**：{selected_student}
+            - **學校**：{school}
+            - **年級**：{grade}
+            - **家長電郵**：{parent_email if parent_email else '（未提供）'}
+            - **老師電郵**：{cc_email if cc_email else '（未提供）'}
+            """)
+
+        # 二次確認機制
+        st.markdown("#### ⚠️ 確認寄送")
+
+        if not parent_email or parent_email.lower() in ["n/a", "nan", "", "none"]:
+            st.error("❌ 該學生的家長電郵地址為空，無法寄送。")
+            st.stop()
+
+        confirm_email = st.checkbox(
+            f"我確認要將工作紙寄送至以下電郵：{parent_email}",
+            key="email_confirm_checkbox"
         )
 
-        if ok:
-            st.success("🎉 已成功寄出！")
-        else:
-            st.error(f"❌ 寄送失敗：{msg}")
+        if not confirm_email:
+            st.caption("請勾選上方確認方塊以啟用寄送按鈕")
+            st.stop()
+
+        # 寄送按鈕
+        if st.button("📨 寄出工作紙", type="primary", use_container_width=True):
+            with st.spinner("正在發送郵件，請稍候..."):
+                ok, msg = send_email_with_pdf(
+                    parent_email,
+                    selected_student,
+                    school,
+                    grade,
+                    pdf_bytes,
+                    cc_email=cc_email
+                )
+
+            if ok:
+                st.success("🎉 已成功寄出工作紙！")
+                st.balloons()
+                st.toast(f"工作紙已成功寄送給 {selected_student} 的家長！", icon="✅")
+            else:
+                st.error(f"❌ 寄送失敗：{msg}")
+                st.info("請檢查網路連線或稍後再試。")
 
 # ============================================================
 # --- End of App ---
