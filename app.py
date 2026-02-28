@@ -514,9 +514,11 @@ def display_pdf_as_images(pdf_bytes):
 # 預先載入資料（加入載入狀態）
 with st.spinner("正在載入資料，請稍候..."):
     student_df = load_students()
-    review_df = load_review()
     used_df = load_used_sentences()  # 載入已使用的句子
-    review_groups = parse_review_table(review_df, used_df)
+
+# 在 spinner 外面定義 review_df，確保後續程式碼可以存取
+review_df = load_review()
+review_groups = parse_review_table(review_df, used_df)
 
 with st.sidebar:
     st.header("⚙️ 控制面板")
@@ -790,10 +792,15 @@ with tab_review:
                                         })
 
                                     # 寫入到「已使用」工作表
+                                    # 寫入到「已使用」工作表（除錯用）
+                                    st.write(f"🔍 DEBUG: 準備寫入 {len(sentences_to_save)} 個句子")
                                     if sentences_to_save:
                                         write_ok, write_msg = write_used_sentences(sentences_to_save)
+                                        st.write(f"🔍 DEBUG: 寫入結果 - 成功={write_ok}, 訊息={write_msg}")
                                         if write_ok:
                                             st.toast(f"已記錄 {len(sentences_to_save)} 個使用記錄到 Google Sheets", icon="📝")
+                                        else:
+                                            st.error(f"❌ 寫入失敗：{write_msg}")
 
                                 st.success("✅ 已成功鎖定題庫並記錄使用！")
                                 st.rerun()
