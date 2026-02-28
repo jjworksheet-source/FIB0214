@@ -117,12 +117,81 @@ def load_review():
 def load_students():
     return load_sheet("學生資料")
 
+
+@st.cache_data(ttl=60)
+def load_used_sentences():
+    """載入已使用的句子工作表"""
+    try:
+        df = load_sheet("已使用")
+        return df
+    except Exception:
+        # 如果工作表不存在，返回空的 DataFrame
+        return pd.DataFrame()
+
+
+def write_used_sentences(sentences_data):
+    """將已使用的句子寫入「已使用」工作表"""
+    try:
+        sh = client.open_by_key(SHEET_ID)
+
+        # 嘗試打開已使用工作表，如果不存在則創建
+        try:
+            ws = sh.worksheet("已使用")
+        except Exception:
+            # 創建新工作表
+            ws = sh.add_worksheet("已使用", rows=1, cols=5)
+            # 設定標題行
+            ws.update('A1:E1', [['學校', '年級', '詞語', '句子', '使用日期']])
+
+        # 準備要寫入的資料
+        today = datetime.date.today().strftime("%Y-%m-%d")
+        rows_to_add = []
+
+        for item in sentences_data:
+            row = [
+                item.get("school", ""),
+                item.get("level", ""),
+                item.get("word", ""),
+                item.get("sentence", ""),
+                today
+            ]
+            rows_to_add.append(row)
+
+        # 找出現有的最後一行
+        if ws.row_count > 1:
+            last_row = ws.row_count + 1
+        else:
+            last_row = 2
+
+        # 寫入資料
+        if rows_to_add:
+            ws.update(f'A{last_row}:E{last_row + len(rows_to_add) - 1}', rows_to_add)
+
+        return True, f"成功寫入 {len(rows_to_add)} 筆記錄"
+
+    except Exception as e:
+        return False, str(e)
+
 # ============================================================
 # --- Review Parser ---
 # ============================================================
 
-def parse_review_table(df: pd.DataFrame):
+def parse_review_table(df: pd.DataFrame, used_df: pd.DataFrame = None):
+    """
+    解析審核表格
+    - df: Review 工作表的資料
+    - used_df: 已使用句子的工作表資料（用於過濾）
+    """
     groups = {}
+
+    # 建立已使用句子的集合，用於快速查詢
+    used_sentences = set()
+    if used_df is not None and not used_df.empty:
+        for _, row in used_df.iterrows():
+            # 用 (學校+年級+詞語+句子) 作為唯一識別
+            key = f"{row.get('學校', '').strip()}||{row.get('年級', '').strip()}||{row.get('詞語', '').strip()}||{row.get('句子', '').strip()}"
+            used_sentences.add(key)
+
     for idx, row in df.iterrows():
         school = row.get("學校", "").strip()
         level = row.get("年級", "").strip()
@@ -131,6 +200,11 @@ def parse_review_table(df: pd.DataFrame):
 
         if not (school and level and word and sentence):
             continue
+
+        # 檢查這個句子是否已經被使用過
+        sentence_key = f"{school}||{level}||{word}||{sentence}"
+        if sentence_key in used_sentences:
+            continue  # 跳過已使用的句子
 
         batch_key = f"{school}||{level}"
         groups.setdefault(batch_key, {})
@@ -441,7 +515,8 @@ def display_pdf_as_images(pdf_bytes):
 with st.spinner("正在載入資料，請稍候..."):
     student_df = load_students()
     review_df = load_review()
-    review_groups = parse_review_table(review_df)
+    used_df = load_used_sentences()  # 載入已使用的句子
+    review_groups = parse_review_table(review_df, used_df)
 
 with st.sidebar:
     st.header("⚙️ 控制面板")
@@ -455,6 +530,7 @@ with st.sidebar:
                 with st.spinner("正在同步最新資料..."):
                     load_review.clear()
                     load_students.clear()
+                    load_used_sentences.clear()  # 清除已使用句子的快取
                     st.session_state.final_pool = {}
                     st.session_state.ai_choices = {}
                     st.session_state.confirmed_batches = set()
@@ -516,6 +592,11 @@ with st.sidebar:
             st.metric("已就緒", ready_words_cnt, delta="✅ 完成" if ready_words_cnt > 0 else None)
 
         st.metric("已鎖定題庫", pool_count)
+
+        # 顯示已使用句子的數量
+        used_count = len(used_df) if used_df is not None and not used_df.empty else 0
+        st.metric("已使用句子", used_count, help="已記錄在「已使用」工作表中的句子總數")
+
         if not student_df.empty and "狀態" in student_df.columns:
             active_count = (student_df["狀態"] == "Y").sum()
             st.metric("啟用學生", int(active_count))
@@ -663,21 +744,58 @@ with tab_review:
                 if is_ready and batch_key not in st.session_state.confirmed_batches:
                     with st.container(border=True):
                         st.markdown("### 🔒 確認並鎖定題庫")
-                        st.info("請確認所有詞語都已選擇句子後，再鎖定題庫。鎖定後將無法修改。")
+                        st.info("請確認所有詞語都已選擇句子後，再鎖定題庫。鎖定後將寫入使用記錄。")
 
                         # 二次確認機制
                         confirm_checkbox = st.checkbox(
-                            "我確認已完成所有詞語的審核，同意鎖定題庫",
+                            "我確認已完成所有詞語的審核，同意鎖定題庫並寫入使用記錄",
                             key=f"confirm_check_{batch_key}"
                         )
 
                         if confirm_checkbox:
                             if st.button(f"✅ 確認並鎖定題庫：{school}", key=f"confirm_{batch_key}", type="primary"):
-                                with st.spinner("正在鎖定題庫..."):
+                                with st.spinner("正在鎖定題庫並寫入使用記錄..."):
+                                    # 構建最終題庫
                                     final_qs = build_final_pool_for_batch(batch_key, word_dict)
                                     st.session_state.final_pool[batch_key] = final_qs
                                     st.session_state.confirmed_batches.add(batch_key)
-                                st.success("✅ 已成功鎖定題庫！")
+
+                                    # 寫入已使用句子到 Google Sheets
+                                    sentences_to_save = []
+                                    for q in final_qs:
+                                        # 找出原始句子（包含 🟨 符號）
+                                        original_sentence = None
+                                        for word_data in word_dict.values():
+                                            if word_data.get("original"):
+                                                if word_data["original"] == q["Content"]:
+                                                    original_sentence = word_data["original"]
+                                                    break
+                                            if q["Content"] in word_data.get("ai", []):
+                                                # 如果是 AI 句子，需要找到帶 🟨 的原始版本
+                                                for original_idx in word_data.get("row_indices", []):
+                                                    if original_idx < len(review_df):
+                                                        original_row = review_df.iloc[original_idx]
+                                                        orig_sent = original_row.get("句子", "").strip()
+                                                        if q["Content"] in orig_sent:
+                                                            original_sentence = orig_sent
+                                                            break
+                                                if original_sentence:
+                                                    break
+
+                                        sentences_to_save.append({
+                                            "school": q["School"],
+                                            "level": q["Level"],
+                                            "word": q["Word"],
+                                            "sentence": original_sentence if original_sentence else q["Content"]
+                                        })
+
+                                    # 寫入到「已使用」工作表
+                                    if sentences_to_save:
+                                        write_ok, write_msg = write_used_sentences(sentences_to_save)
+                                        if write_ok:
+                                            st.toast(f"已記錄 {len(sentences_to_save)} 個使用記錄到 Google Sheets", icon="📝")
+
+                                st.success("✅ 已成功鎖定題庫並記錄使用！")
                                 st.rerun()
                         else:
                             st.caption("請勾選上方確認方塊以啟用鎖定按鈕")
