@@ -476,18 +476,32 @@ with st.sidebar:
 
     # === 篩選區塊 ===
     with st.container(border=True):
-        all_levels = sorted({k.split("||")[1] for k in standby_groups}) if standby_groups else ["P1"]
-        st.subheader("🎓 選擇年級")
+        # --- 替換開始 (原本的 479-491 行) ---
+        st.subheader("🔍 篩選條件")
+        
+        # 1. 先選學校
+        all_schools = sorted({k.split("||")[0] for k in standby_groups}) if standby_groups else ["無資料"]
+        selected_school = st.selectbox("🏫 選擇學校", all_schools)
+        
+        # 2. 根據學校過濾年級
+        available_levels = sorted({
+            k.split("||")[1] for k in standby_groups 
+            if k.startswith(f"{selected_school}||")
+        })
         selected_level = st.selectbox(
-            "年級",
-            all_levels,
-            index=0,
-            label_visibility="collapsed",
-            help="選擇要處理的工作表年級"
+            "🎓 選擇年級", 
+            available_levels if available_levels else ["P1"],
+            label_visibility="visible"
         )
 
-        if st.session_state.last_selected_level != selected_level:
-            st.session_state.last_selected_level = selected_level
+        # 3. 組合目前的 Batch Key
+        current_batch_key = f"{selected_school}||{selected_level}"
+
+        # 4. 狀態重置邏輯
+        if st.session_state.last_selected_level != current_batch_key:
+            st.session_state.last_selected_level = current_batch_key
+            st.session_state.selected_student_name_b = None
+        # --- 替換結束 ---
             st.session_state.selected_student_name_b = None
 
     st.divider()
