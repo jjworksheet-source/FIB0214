@@ -784,7 +784,9 @@ with tab_email:
         st.markdown("### 📄 工作紙預覽")
 
         with st.spinner("正在生成 PDF..."):
-            pdf_bytes = create_pdf(school, grade, questions, student_name=selected_student)
+            # 這裡加上 .getvalue() 把文件對象轉成純數據
+            pdf_obj = create_pdf(school, grade, questions, student_name=selected_student)
+            pdf_bytes = pdf_obj.getvalue()
 
         st.download_button(
             label="⬇️ 下載學生版 PDF",
