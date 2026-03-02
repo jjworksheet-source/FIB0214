@@ -255,44 +255,113 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
     return cur_y
 
 # ============================================================
-# --- Student Worksheet PDF Generator ---
+# --- Student Worksheet PDF Generator (WITH WORDS TABLE) ---
 # ============================================================
 
 def create_pdf(school_name, level, questions, student_name=None):
-    from reportlab.pdfgen import canvas as rl_canvas
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
 
     bio = io.BytesIO()
-    c = rl_canvas.Canvas(bio, pagesize=letter)
-    _, page_height = letter
-    font_name = CHINESE_FONT or "Helvetica"
-    max_width = 450
-    cur_y = page_height - 60
+    doc = SimpleDocTemplate(bio, pagesize=letter)
+    story = []
 
-    c.setFont(font_name, 22)
-    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
-            else f"{school_name} ({level}) - 校本填充工作紙"
-    c.drawString(60, cur_y, title)
-    cur_y -= 30
+    styles = getSampleStyleSheet()
+    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    c.setFont(font_name, 18)
-    c.drawString(60, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
-    cur_y -= 30
+    # --- STYLES ---
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontName=font_name,
+        fontSize=22,
+        alignment=TA_CENTER,
+        spaceAfter=12
+    )
 
-    for idx, row in enumerate(questions):
-        content = row["Content"]
-        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontName=font_name,
+        fontSize=18,
+        leading=26,               # 👈 Line spacing
+        leftIndent=0,
+        firstLineIndent=0
+    )
 
-        if cur_y < 80:
-            c.showPage()
-            cur_y = page_height - 60
+    vocab_title_style = ParagraphStyle(
+        'VocabTitle',
+        parent=styles['Heading2'],
+        fontName=font_name,
+        fontSize=20,
+        alignment=TA_CENTER,
+        spaceAfter=20
+    )
 
-        c.setFont(font_name, 18)
-        c.drawString(60, cur_y, f"{idx+1}.")
-        cur_y = draw_text_with_underline_wrapped(
-            c, 100, cur_y, content, font_name, 18, max_width
-        )
+    # --- TITLE & DATE ---
+    title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>" if student_name \
+                 else f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
+    story.append(Paragraph(title_text, title_style))
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
+    story.append(Spacer(1, 0.3*inch))
 
-    c.save()
+    # --- QUESTIONS ---
+    for i, row in enumerate(questions):
+        content = row['Content']
+        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)  # 專名號
+        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)  # Fill-in blank
+
+        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
+        content_para = Paragraph(content, normal_style)
+
+        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
+        t.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(t)
+        story.append(Spacer(1, 0.15*inch))
+
+    # --- VOCABULARY TABLE (Second Page) ---
+    words = [row.get('Word', '').strip() for row in questions]
+    unique_words = list(dict.fromkeys([w for w in words if w]))  # Preserve order, remove duplicates
+
+    if unique_words:
+        story.append(PageBreak())
+        story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
+        story.append(Spacer(1, 0.2*inch))
+
+        # Build 4-column table
+        num_cols = 4
+        table_data = []
+        for i in range(0, len(unique_words), num_cols):
+            row = unique_words[i:i+num_cols]
+            while len(row) < num_cols:
+                row.append('')
+            table_data.append(row)
+
+        col_width = 1.8*inch
+        vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
+        vocab_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 22),         # 👈 Bigger font
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ('TOPPADDING', (0, 0), (-1, -1), 16),       # 👈 Padding
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
+            ('LEFTPADDING', (0, 0), (-1, -1), 12),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+        ]))
+        story.append(vocab_table)
+
+    doc.build(story)
     bio.seek(0)
     return bio
 
