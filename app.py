@@ -1,5 +1,3 @@
-import pandas as pd
-import streamlit as st
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -258,115 +256,49 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
     return cur_y
 
 # ============================================================
-# --- Student Worksheet PDF Generator (MODIFIED on mar 2 16:00) ---
+# --- Student Worksheet PDF Generator ---
 # ============================================================
 
 def create_pdf(school_name, level, questions, student_name=None):
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER
+    from reportlab.pdfgen import canvas as rl_canvas
 
     bio = io.BytesIO()
-    doc = SimpleDocTemplate(bio, pagesize=letter)
-    story = []
+    c = rl_canvas.Canvas(bio, pagesize=letter)
+    _, page_height = letter
+    font_name = CHINESE_FONT or "Helvetica"
+    max_width = 500
+    cur_y = page_height - 60
 
-    styles = getSampleStyleSheet()
-    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+    # 標題
+    c.setFont(font_name, 22)
+    title = f"{school_name} ({level}) - {student_name} - 校本填充工作紙" if student_name \
+            else f"{school_name} ({level}) - 校本填充工作紙"
+    c.drawString(60, cur_y, title)
+    cur_y -= 30
 
-    # --- TITLE STYLE ---
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontName=font_name,
-        fontSize=22,
-        alignment=TA_CENTER,
-        spaceAfter=12
-    )
+    # 日期
+    c.setFont(font_name, 18)
+    c.drawString(60, cur_y, f"日期: {datetime.date.today() + datetime.timedelta(days=1)}")
+    cur_y -= 30
 
-    # --- BODY TEXT STYLE WITH LINE SPACING ---
-    normal_style = ParagraphStyle(
-        'CustomNormal',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=18,
-        leading=26,              # 👈 Controls line spacing
-        leftIndent=0,
-        firstLineIndent=0
-    )
+    # 題目
+    for idx, row in enumerate(questions):
+        content = row["Content"]
 
-    # --- VOCABULARY TABLE TITLE STYLE ---
-    vocab_title_style = ParagraphStyle(
-        'VocabTitle',
-        parent=styles['Heading2'],
-        fontName=font_name,
-        fontSize=20,
-        alignment=TA_CENTER,
-        spaceAfter=20
-    )
-
-    # --- TITLE ---
-    title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>" if student_name \
-                 else f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
-    story.append(Paragraph(title_text, title_style))
-    story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
-    story.append(Spacer(1, 0.3*inch))
-
-    # --- QUESTIONS ---
-    for i, row in enumerate(questions):
-        content = row['Content']
+        # 處理底線格式
         content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
-        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
 
-        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
-        content_para = Paragraph(content, normal_style)
+        if cur_y < 80:
+            c.showPage()
+            cur_y = page_height - 60
 
-        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
-        t.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ]))
-        story.append(t)
-        story.append(Spacer(1, 0.15*inch))
+        c.setFont(font_name, 18)
+        c.drawString(60, cur_y, f"{idx+1}.")
+        cur_y = draw_text_with_underline_wrapped(
+            c, 100, cur_y, content, font_name, 18, max_width
+        )
 
-    # --- VOCABULARY TABLE (Second Page) ---
-    words = [row.get('Word', '').strip() for row in questions]
-    unique_words = list(dict.fromkeys([w for w in words if w]))
-
-    if unique_words:
-        story.append(PageBreak())
-        story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
-        story.append(Spacer(1, 0.2*inch))
-
-        # Organize into 4-column table
-        num_cols = 4
-        table_data = []
-        for i in range(0, len(unique_words), num_cols):
-            row = unique_words[i:i+num_cols]
-            while len(row) < num_cols:
-                row.append('')
-            table_data.append(row)
-
-        col_width = 1.8*inch
-        vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
-        vocab_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 22),         # 👈 Larger font for readability
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 16),       # 👈 Vertical padding
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),      # 👈 Horizontal padding
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ]))
-        story.append(vocab_table)
-
-    doc.build(story)
+    c.save()
     bio.seek(0)
     return bio
 
@@ -626,6 +558,100 @@ def _get_max_width():
     page_width, _ = letter
     return page_width - PDF_RIGHT_MARGIN - PDF_TEXT_START
 
+# ============================================================
+# --- Mode A: AI 句子審核 ---
+# ============================================================
+
+st.divider()
+
+if send_mode == "🤖 AI 句子審核":
+    st.subheader("🤖 AI 句子審核")
+    
+    level_groups = {k: v for k, v in review_groups.items() if k.endswith(f"||{selected_level}")}
+
+    if not level_groups:
+        st.success(f"✅ {selected_level} 目前沒有任何題目。")
+        st.stop()
+
+    for batch_key, word_dict in level_groups.items():
+        school, level = batch_key.split("||")
+        st.markdown(f"### 🏫 {school}（{level}）")
+
+        has_any_ai_review = any(d["needs_review"] for d in word_dict.values())
+
+        if not has_any_ai_review:
+            # --- 情況 1：全部都是原句，不需要審核 ---
+            st.info(f"💡 這次 **{school}** 學校句子沒有需要審核，請直接到「按學校預覽下載」或「按學生寄送」使用工作紙。")
+            
+            if batch_key not in st.session_state.confirmed_batches:
+                final_qs = build_final_pool_for_batch(batch_key, word_dict)
+                st.session_state.final_pool[batch_key] = final_qs
+                st.session_state.confirmed_batches.add(batch_key)
+
+        else:
+            # --- 情況 2：有 AI 句需要審核 ---
+            ready_words, pending_words, is_ready = compute_batch_readiness(batch_key, word_dict)
+
+            for word, data in word_dict.items():
+                if data["needs_review"]:
+                    st.markdown(f"#### 詞語：{word}")
+                    ai_list = data["ai"]
+                    key_radio = f"{batch_key}||{word}||choice"
+                    key_custom = f"{batch_key}||{word}||custom"
+
+                    # 選項：AI 句子 + 自行輸入（移除「不選」）
+                    options = ai_list + ["✏️ 自行輸入句子"]
+
+                    # 決定預設選哪一個
+                    current = st.session_state.ai_choices.get(f"{batch_key}||{word}||0", None)
+                    if current in ai_list:
+                        default_index = ai_list.index(current)
+                    elif current and current not in ai_list:
+                        default_index = len(options) - 1
+                    else:
+                        default_index = 0  # 預設選第一句
+
+                    selected = st.radio(
+                        f"請為「{word}」選擇最合適的句子：",
+                        options,
+                        index=default_index,
+                        key=key_radio
+                    )
+
+                    if selected == "✏️ 自行輸入句子":
+                        prev_custom = st.session_state.get(key_custom, "")
+                        custom_input = st.text_input(
+                            f"請輸入「{word}」的自定義句子（請用【】詞語【】標示）：",
+                            value=prev_custom,
+                            key=key_custom,
+                            placeholder="例如：小明【定期】到牙科診所檢查牙齒。"
+                        )
+                        if custom_input.strip():
+                            st.session_state.ai_choices[f"{batch_key}||{word}||0"] = custom_input.strip()
+                        else:
+                            st.session_state.ai_choices.pop(f"{batch_key}||{word}||0", None)
+                    else:
+                        st.session_state.ai_choices[f"{batch_key}||{word}||0"] = selected
+                        if key_custom in st.session_state:
+                            del st.session_state[key_custom]
+
+            # 顯示待確認詞語提示
+            if pending_words:
+                st.warning(f"⚠️ 以下詞語尚未選擇句子：{', '.join(pending_words)}")
+
+            # 確認鎖定按鈕
+            if is_ready and batch_key not in st.session_state.confirmed_batches:
+                if st.button(f"🔒 確認並鎖定題庫：{school}", key=f"confirm_{batch_key}"):
+                    final_qs = build_final_pool_for_batch(batch_key, word_dict)
+                    st.session_state.final_pool[batch_key] = final_qs
+                    st.session_state.confirmed_batches.add(batch_key)
+                    st.success("✅ 已鎖定題庫！")
+                    st.rerun()
+            elif batch_key in st.session_state.confirmed_batches:
+                st.success("✅ 此批次已完成審核並鎖定。")
+
+        st.divider()
+	
 
 # ============================================================
 # --- Mode B: 按學校預覽下載 ---
@@ -752,202 +778,3 @@ if send_mode == "👨‍👩‍👧 按學生寄送":
 
 st.write("")
 st.write("© 2026 校本填充工作紙生成器 — 自動化教學工具")
-
-import gspread
-from google.oauth2.service_account import Credentials
-import pandas as pd
-import datetime
-import io
-import os
-import re
-
-# --- 1. SETUP & CONNECTION ---
-st.set_page_config(page_title="Worksheet Generator", page_icon="📝")
-st.title("📝 Worksheet Generator")
-
-# Try to import reportlab and handle font registration
-try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.lib.units import inch
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.enums import TA_CENTER
-    
-    # Register a font that supports Chinese if available
-    # Common paths for fonts on Linux/Streamlit Cloud
-    font_paths = [
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        "TW-Kai-98_1.ttf", # Upload this to your GitHub repo
-        "NotoSansTC-Regular.otf"
-    ]
-    
-    CHINESE_FONT = None
-    for path in font_paths:
-        if os.path.exists(path):
-            try:
-                pdfmetrics.registerFont(TTFont('ChineseFont', path))
-                CHINESE_FONT = 'ChineseFont'
-                break
-            except:
-                continue
-    
-    if not CHINESE_FONT:
-        st.warning("⚠️ Chinese font not found. Chinese characters may appear as boxes in the PDF.")
-        uploaded_font = st.file_uploader("📤 Upload Chinese Font (.ttf or .otf)", type=['ttf', 'otf'])
-        if uploaded_font is not None:
-            try:
-                # Save uploaded font to a temporary file to register it
-                with open("temp_font.ttf", "wb") as f:
-                    f.write(uploaded_font.getbuffer())
-                pdfmetrics.registerFont(TTFont('ChineseFont', "temp_font.ttf"))
-                CHINESE_FONT = 'ChineseFont'
-                st.success("✅ Font uploaded and registered successfully!")
-            except Exception as e:
-                st.error(f"❌ Error registering font: {e}")
-except ImportError:
-    st.error("❌ reportlab not found. Please add 'reportlab' to your requirements.txt")
-    st.stop()
-
-# Load Secrets
-try:
-    # Construct the credentials dictionary from secrets
-    key_dict = st.secrets["gcp_service_account"]
-    creds = Credentials.from_service_account_info(
-        key_dict,
-        scopes=["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    client = gspread.authorize(creds)
-    
-    # Get Config
-    SHEET_ID = st.secrets["app_config"]["spreadsheet_id"]
-    
-    st.success("✅ Connected to Google Cloud!")
-except Exception as e:
-    st.error(f"❌ Connection Error: {e}")
-    st.stop()
-
-# --- 2. READ DATA ---
-@st.cache_data(ttl=60) # Cache for 1 minute so it doesn't reload constantly
-def load_data():
-    try:
-        sh = client.open_by_key(SHEET_ID)
-        worksheet = sh.worksheet("standby")
-        data = worksheet.get_all_records()
-        return pd.DataFrame(data)
-    except Exception as e:
-        st.error(f"Error reading sheet: {e}")
-        return pd.DataFrame()
-
-if st.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-    st.rerun()
-
-df = load_data()
-
-if df.empty:
-    st.warning("The 'standby' sheet is empty or could not be read.")
-    st.stop()
-
-# --- 3. FILTER & SELECT ---
-st.subheader("Select Questions")
-
-# Filter for 'Ready' status
-# We look for columns: 'School', 'Word', 'Type', 'Content', 'Status'
-try:
-    # Filter rows where Status is 'Ready' or 'Waiting'
-    ready_df = df[df['Status'].isin(['Ready', 'Waiting'])]
-except KeyError:
-    st.error("Column 'Status' not found. Please check your Google Sheet headers.")
-    st.write("Available columns:", df.columns.tolist())
-    st.stop()
-
-if ready_df.empty:
-    st.info("No questions with status 'Ready' or 'Waiting'.")
-    st.stop()
-
-# Show data editor
-edited_df = st.data_editor(
-    ready_df,
-    column_config={
-        "Select": st.column_config.CheckboxColumn("Generate?", default=True)
-    },
-    disabled=["School", "Word"],
-    hide_index=True
-)
-
-# --- 4. GENERATE PDF ---
-def create_pdf(school_name, questions):
-    bio = io.BytesIO()
-    doc = SimpleDocTemplate(bio, pagesize=letter)
-    story = []
-    
-    # Styles
-    styles = getSampleStyleSheet()
-    
-    # Use registered Chinese font if found, otherwise fallback
-    font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-    
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontName=font_name,
-        fontSize=20,
-        alignment=TA_CENTER,
-        spaceAfter=12
-    )
-    
-    # Hanging indent style: leftIndent moves the whole block, firstLineIndent moves it back
-    normal_style = ParagraphStyle(
-        'CustomNormal',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=14,
-        leading=20,
-        leftIndent=25,
-        firstLineIndent=-25
-    )
-    
-    # Title
-    title = Paragraph(f"<b>{school_name} - Weekly Review</b>", title_style)
-    story.append(title)
-    story.append(Spacer(1, 0.2*inch))
-    
-    # Date
-    date_text = Paragraph(f"Date: {datetime.date.today()}", normal_style)
-    story.append(date_text)
-    story.append(Spacer(1, 0.3*inch))
-    
-    # Questions
-    for i, row in enumerate(questions):
-        content = row['Content']
-        # Convert 【】text【】 to <u>text</u> for underline (專名號)
-        content = re.sub(r'【】(.+?)【】', r'<u>\1</u>', content)
-        question_text = f"{i+1}. {content}"
-        p = Paragraph(question_text, normal_style)
-        story.append(p)
-        story.append(Spacer(1, 0.15*inch))
-    
-    # Build PDF
-    doc.build(story)
-    bio.seek(0)
-    return bio
-
-if st.button("🚀 Generate PDF Document"):
-    # Group by school
-    schools = edited_df['School'].unique()
-    
-    for school in schools:
-        school_data = edited_df[edited_df['School'] == school]
-        
-        if not school_data.empty:
-            pdf_file = create_pdf(school, school_data.to_dict('records'))
-            
-            st.download_button(
-                label=f"📥 Download {school}.pdf",
-                data=pdf_file,
-                file_name=f"{school}_Review_{datetime.date.today()}.pdf",
-                mime="application/pdf"
-            )
