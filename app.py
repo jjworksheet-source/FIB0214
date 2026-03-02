@@ -751,7 +751,9 @@ if send_mode == "👨‍👩‍👧 按學生寄送":
 # ============================================================
 
 st.write("")
-st.write("© 2026 校本填充工作紙生成器 — 自動化教學工具")ort gspread
+st.write("© 2026 校本填充工作紙生成器 — 自動化教學工具")
+
+import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 import datetime
