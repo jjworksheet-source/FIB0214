@@ -255,18 +255,32 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
     return cur_y
 
 # ============================================================
-# --- Student Worksheet PDF Generator (WITH WORDS TABLE) ---
+# --- Student Worksheet PDF Generator (WITH HEADER ON EVERY PAGE) ---
 # ============================================================
 
 def create_pdf(school_name, level, questions, student_name=None):
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Frame, PageTemplate
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import letter
 
     bio = io.BytesIO()
+
+    # --- CUSTOM PAGE TEMPLATE WITH HEADER ---
+    def header_footer(canvas, doc):
+        canvas.saveState()
+        font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
+        canvas.setFont(font_name, 14)
+        canvas.drawCentredString(letter[0] / 2, letter[1] - 0.5*inch, "童學童樂教育中心")
+        canvas.restoreState()
+
+    frame = Frame(0.75*inch, 0.75*inch, letter[0]-1.5*inch, letter[1]-2*inch, id='normal')
+    template = PageTemplate(id='header_template', frames=frame, onPage=header_footer)
     doc = SimpleDocTemplate(bio, pagesize=letter)
+    doc.addPageTemplates(template)
+
     story = []
 
     styles = getSampleStyleSheet()
@@ -287,7 +301,7 @@ def create_pdf(school_name, level, questions, student_name=None):
         parent=styles['Normal'],
         fontName=font_name,
         fontSize=18,
-        leading=26,               # 👈 Line spacing
+        leading=26,
         leftIndent=0,
         firstLineIndent=0
     )
@@ -301,7 +315,7 @@ def create_pdf(school_name, level, questions, student_name=None):
         spaceAfter=20
     )
 
-    # --- TITLE & DATE ---
+    # --- TITLE & DATE (AFTER HEADER) ---
     title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>" if student_name \
                  else f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
     story.append(Paragraph(title_text, title_style))
@@ -312,8 +326,8 @@ def create_pdf(school_name, level, questions, student_name=None):
     # --- QUESTIONS ---
     for i, row in enumerate(questions):
         content = row['Content']
-        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)  # 專名號
-        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)  # Fill-in blank
+        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
+        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
 
         num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
         content_para = Paragraph(content, normal_style)
@@ -329,10 +343,7 @@ def create_pdf(school_name, level, questions, student_name=None):
         story.append(Spacer(1, 0.15*inch))
 
     # --- VOCABULARY TABLE (Second Page) ---
-    # 1. Extract words in the same order as the questions
     words = [row.get('Word', '').strip() for row in questions]
-    
-    # 2. Remove duplicates while preserving order (Python 3.7+ dict behavior)
     unique_words = list(dict.fromkeys([w for w in words if w]))
 
     if unique_words:
@@ -340,7 +351,6 @@ def create_pdf(school_name, level, questions, student_name=None):
         story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
         story.append(Spacer(1, 0.2*inch))
 
-        # Build 4-column table
         num_cols = 4
         table_data = []
         for i in range(0, len(unique_words), num_cols):
@@ -353,11 +363,11 @@ def create_pdf(school_name, level, questions, student_name=None):
         vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
         vocab_table.setStyle(TableStyle([
             ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 22),         # 👈 Bigger font
+            ('FONTSIZE', (0, 0), (-1, -1), 22),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 16),       # 👈 Padding
+            ('TOPPADDING', (0, 0), (-1, -1), 16),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
             ('LEFTPADDING', (0, 0), (-1, -1), 12),
             ('RIGHTPADDING', (0, 0), (-1, -1), 12),
