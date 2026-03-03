@@ -308,10 +308,18 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         story.append(Spacer(1, 0.15*inch))
 
     # --- 第二頁：詞語表 (確保按輸入順序) ---
-    # 如果有提供 original_questions 則使用它（輸入順序），否則使用當前題目
-    source_list = original_questions if original_questions is not None else questions
-    words = [row.get('Word', '').strip() for row in source_list]
-    unique_words = list(dict.fromkeys([w for w in words if w])) # 去重並保留順序
+    # --- PAGE 2: Vocabulary Table (use original order but only include words present in the shuffled questions) ---
+    if original_questions is not None:
+        # 1) 先把 shuffled（頁面題目）中出現的詞集合出來
+        shuffled_word_set = set([r.get('Word','').strip() for r in questions if r.get('Word','').strip()])
+    
+        # 2) 以 original_questions 的順序走，且僅保留出現在 shuffled 的詞
+        words = [row.get('Word','').strip() for row in original_questions if row.get('Word','').strip() in shuffled_word_set]
+    else:
+        # fallback: 以 questions 的順序（通常是 shuffled）
+        words = [row.get('Word', '').strip() for row in questions]
+    
+    unique_words = list(dict.fromkeys([w for w in words if w]))  # 去重且保留順序
 
     if unique_words:
         story.append(PageBreak())
