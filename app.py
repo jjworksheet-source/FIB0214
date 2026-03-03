@@ -259,17 +259,6 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
 # ============================================================
 
 def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
-    # ... (keep existing header/styles code) ...
-
-    # --- VOCABULARY TABLE (Second Page) ---
-    # Use original_questions if provided, otherwise fallback to current questions
-    source_list = original_questions if original_questions is not None else questions
-    
-    words = [row.get('Word', '').strip() for row in source_list]
-    unique_words = list(dict.fromkeys([w for w in words if w]))
-    
-    # ... (keep the rest of the table rendering code) ...
-    
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Frame, PageTemplate
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
@@ -279,11 +268,11 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
 
     bio = io.BytesIO()
 
-    # --- CUSTOM PAGE TEMPLATE WITH HEADER ---
+    # --- 每頁固定頁首 ---
     def header_footer(canvas, doc):
         canvas.saveState()
         font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-        canvas.setFont(font_name, 23)
+        canvas.setFont(font_name, 23) # 與標題同大
         canvas.drawCentredString(letter[0] / 2, letter[1] - 1*inch, "童學童樂教育中心")
         canvas.restoreState()
 
@@ -293,101 +282,53 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
     doc.addPageTemplates(template)
 
     story = []
-
     styles = getSampleStyleSheet()
     font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
 
-    # --- STYLES ---
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontName=font_name,
-        fontSize=22,
-        alignment=TA_CENTER,
-        spaceAfter=12
-    )
+    # --- 樣式設定 ---
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontName=font_name, fontSize=22, alignment=TA_CENTER, spaceAfter=12)
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontName=font_name, fontSize=18, leading=26)
+    vocab_title_style = ParagraphStyle('VocabTitle', parent=styles['Heading2'], fontName=font_name, fontSize=20, alignment=TA_CENTER, spaceAfter=20)
 
-    normal_style = ParagraphStyle(
-        'CustomNormal',
-        parent=styles['Normal'],
-        fontName=font_name,
-        fontSize=18,
-        leading=26,
-        leftIndent=0,
-        firstLineIndent=0
-    )
-
-    vocab_title_style = ParagraphStyle(
-        'VocabTitle',
-        parent=styles['Heading2'],
-        fontName=font_name,
-        fontSize=20,
-        alignment=TA_CENTER,
-        spaceAfter=20
-    )
-
-    # --- TITLE & DATE (AFTER HEADER) ---
-    title_text = f"<b>{school_name} ({level}) - {student_name} - 校本填充工作紙</b>" if student_name \
-                 else f"<b>{school_name} ({level}) - 校本填充工作紙</b>"
+    # --- 第一頁：標題與題目 ---
+    title_text = f"<b>{school_name} ({level}) - {student_name if student_name else ''} - 校本填充工作紙</b>"
     story.append(Paragraph(title_text, title_style))
     story.append(Spacer(1, 0.2*inch))
     story.append(Paragraph(f"日期: {datetime.date.today() + datetime.timedelta(days=1)}", normal_style))
     story.append(Spacer(1, 0.3*inch))
 
-    # --- QUESTIONS ---
     for i, row in enumerate(questions):
         content = row['Content']
-        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content)
-        content = re.sub(r'【(.+?)】', r'<u>________</u>', content)
-
-        num_para = Paragraph(f"<b>{i+1}.</b>", normal_style)
-        content_para = Paragraph(content, normal_style)
-
-        t = Table([[num_para, content_para]], colWidths=[0.5*inch, 6.7*inch])
-        t.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('LEFTPADDING', (0, 0), (-1, -1), 0),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-        ]))
+        content = re.sub(r'【】(.*?)【】', r'<u>\1</u>', content) # 專名號
+        content = re.sub(r'【(.+?)】', r'<u>________</u>', content) # 填充位
+        
+        t = Table([[Paragraph(f"<b>{i+1}.</b>", normal_style), Paragraph(content, normal_style)]], colWidths=[0.5*inch, 6.7*inch])
+        t.setStyle(TableStyle([('VALIGN', (0,0), (-1,-1), 'TOP'), ('LEFTPADDING', (0,0), (-1,-1), 0), ('BOTTOMPADDING', (0,0), (-1,-1), 6)]))
         story.append(t)
         story.append(Spacer(1, 0.15*inch))
 
-    # --- VOCABULARY TABLE (Second Page) ---
-    # 1. Use 'original_questions' instead of 'questions' to get the Input Order
-    # We check if original_questions exists, otherwise fallback to questions
-    source_list = original_questions if 'original_questions' in locals() and original_questions is not None else questions
-    
+    # --- 第二頁：詞語表 (確保按輸入順序) ---
+    # 如果有提供 original_questions 則使用它（輸入順序），否則使用當前題目
+    source_list = original_questions if original_questions is not None else questions
     words = [row.get('Word', '').strip() for row in source_list]
-    
-    # 2. Remove duplicates while preserving that Input Order
-    unique_words = list(dict.fromkeys([w for w in words if w]))
+    unique_words = list(dict.fromkeys([w for w in words if w])) # 去重並保留順序
 
     if unique_words:
         story.append(PageBreak())
         story.append(Paragraph("<b>詞語表</b>", vocab_title_style))
         story.append(Spacer(1, 0.2*inch))
 
-        num_cols = 4
         table_data = []
-        for i in range(0, len(unique_words), num_cols):
-            row = unique_words[i:i+num_cols]
-            while len(row) < num_cols:
-                row.append('')
+        for i in range(0, len(unique_words), 4):
+            row = unique_words[i:i+4]
+            while len(row) < 4: row.append('')
             table_data.append(row)
 
-        col_width = 1.8*inch
-        vocab_table = Table(table_data, colWidths=[col_width]*num_cols)
+        vocab_table = Table(table_data, colWidths=[1.8*inch]*4)
         vocab_table.setStyle(TableStyle([
-            ('FONTNAME', (0, 0), (-1, -1), font_name),
-            ('FONTSIZE', (0, 0), (-1, -1), 22),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, 0), (-1, -1), 16),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
-            ('LEFTPADDING', (0, 0), (-1, -1), 12),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ('FONTNAME', (0,0), (-1,-1), font_name), ('FONTSIZE', (0,0), (-1,-1), 22),
+            ('ALIGN', (0,0), (-1,-1), 'CENTER'), ('GRID', (0,0), (-1,-1), 1, colors.black),
+            ('TOPPADDING', (0,0), (-1,-1), 16), ('BOTTOMPADDING', (0,0), (-1,-1), 16)
         ]))
         story.append(vocab_table)
 
