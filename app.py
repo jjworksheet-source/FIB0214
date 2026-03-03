@@ -258,7 +258,18 @@ def draw_text_with_underline_wrapped(c, x, y, text, font_name, font_size, max_wi
 # --- Student Worksheet PDF Generator (WITH HEADER ON EVERY PAGE) ---
 # ============================================================
 
-def create_pdf(school_name, level, questions, student_name=None):
+def create_pdf(school_name, level, questions, student_name=None, original_questions=None):
+    # ... (keep existing header/styles code) ...
+
+    # --- VOCABULARY TABLE (Second Page) ---
+    # Use original_questions if provided, otherwise fallback to current questions
+    source_list = original_questions if original_questions is not None else questions
+    
+    words = [row.get('Word', '').strip() for row in source_list]
+    unique_words = list(dict.fromkeys([w for w in words if w]))
+    
+    # ... (keep the rest of the table rendering code) ...
+    
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Table, TableStyle, Frame, PageTemplate
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib.units import inch
