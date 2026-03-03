@@ -343,10 +343,13 @@ def create_pdf(school_name, level, questions, student_name=None):
         story.append(Spacer(1, 0.15*inch))
 
     # --- VOCABULARY TABLE (Second Page) ---
-    # 1. Extract words in the same order as the questions
-    words = [row.get('Word', '').strip() for row in questions]
+    # 1. Use 'original_questions' instead of 'questions' to get the Input Order
+    # We check if original_questions exists, otherwise fallback to questions
+    source_list = original_questions if 'original_questions' in locals() and original_questions is not None else questions
     
-    # 2. Remove duplicates while preserving order (Python 3.7+ dict behavior)
+    words = [row.get('Word', '').strip() for row in source_list]
+    
+    # 2. Remove duplicates while preserving that Input Order
     unique_words = list(dict.fromkeys([w for w in words if w]))
 
     if unique_words:
