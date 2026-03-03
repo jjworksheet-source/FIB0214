@@ -308,18 +308,24 @@ def create_pdf(school_name, level, questions, student_name=None, original_questi
         story.append(Spacer(1, 0.15*inch))
 
     # --- 第二頁：詞語表 (確保按輸入順序) ---
-    # --- PAGE 2: Vocabulary Table (use original order but only include words present in the shuffled questions) ---
+    # --- PAGE 2: Vocabulary Table ---
     if original_questions is not None:
-        # 1) 先把 shuffled（頁面題目）中出現的詞集合出來
-        shuffled_word_set = set([r.get('Word','').strip() for r in questions if r.get('Word','').strip()])
-    
-        # 2) 以 original_questions 的順序走，且僅保留出現在 shuffled 的詞
-        words = [row.get('Word','').strip() for row in original_questions if row.get('Word','').strip() in shuffled_word_set]
+        # Use the original order as the master list
+        # Only include words that actually appear in the current (shuffled) question set
+        shuffled_word_set = {r.get('Word','').strip() for r in questions if r.get('Word','').strip()}
+        
+        # Extract words from original_questions to maintain input order
+        words = [row.get('Word','').strip() for row in original_questions 
+                 if row.get('Word','').strip() in shuffled_word_set]
     else:
-        # fallback: 以 questions 的順序（通常是 shuffled）
+        # Fallback if original is not provided
         words = [row.get('Word', '').strip() for row in questions]
     
-    unique_words = list(dict.fromkeys([w for w in words if w]))  # 去重且保留順序
+    # Remove duplicates while preserving the order established above
+    unique_words = []
+    for w in words:
+        if w and w not in unique_words:
+            unique_words.append(w)
 
     if unique_words:
         story.append(PageBreak())
@@ -740,7 +746,7 @@ with tab_preview:
 
             with st.spinner("正在生成 PDF..."):
                 # 使用隨機排序後的 shuffled_qs 生成 PDF
-                pdf_bytes = create_pdf(school, level, shuffled_qs)
+                pdf_bytes = create_pdf(school, level, shuffled_qs, original_questions=questions)
                 answer_pdf_bytes = create_answer_pdf(school, level, shuffled_qs)
 
             col1, col2 = st.columns(2)
@@ -833,7 +839,8 @@ with tab_email:
 
         with st.spinner("正在生成 PDF..."):
             # 這裡加上 .getvalue() 把文件對象轉成純數據
-            pdf_obj = create_pdf(school, grade, questions, student_name=selected_student)
+            shuffled_email_qs = get_shuffled_questions(questions, f"email_{selected_student}")
+            pdf_obj = create_pdf(school, grade, shuffled_email_qs, student_name=selected_student, original_questions=questions)
             pdf_bytes = pdf_obj.getvalue()
 
         st.download_button(
