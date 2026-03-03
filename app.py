@@ -272,8 +272,8 @@ def create_pdf(school_name, level, questions, student_name=None):
     def header_footer(canvas, doc):
         canvas.saveState()
         font_name = CHINESE_FONT if CHINESE_FONT else 'Helvetica'
-        canvas.setFont(font_name, 14)
-        canvas.drawCentredString(letter[0] / 2, letter[1] - 0.5*inch, "童學童樂教育中心")
+        canvas.setFont(font_name, 22)
+        canvas.drawCentredString(letter[0] / 2, letter[1] - 0.8*inch, "童學童樂教育中心")
         canvas.restoreState()
 
     frame = Frame(0.75*inch, 0.75*inch, letter[0]-1.5*inch, letter[1]-2*inch, id='normal')
