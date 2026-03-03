@@ -329,8 +329,11 @@ def create_pdf(school_name, level, questions, student_name=None):
         story.append(Spacer(1, 0.15*inch))
 
     # --- VOCABULARY TABLE (Second Page) ---
+    # 1. Extract words in the same order as the questions
     words = [row.get('Word', '').strip() for row in questions]
-    unique_words = list(dict.fromkeys([w for w in words if w]))  # Preserve order, remove duplicates
+    
+    # 2. Remove duplicates while preserving order (Python 3.7+ dict behavior)
+    unique_words = list(dict.fromkeys([w for w in words if w]))
 
     if unique_words:
         story.append(PageBreak())
