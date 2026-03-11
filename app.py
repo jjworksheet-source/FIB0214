@@ -780,6 +780,9 @@ with tab_preview:
 # ============================================================
 
 with tab_email:
+    st.write(f"目前選中：{selected_school} / {selected_level}") # 測試行 1
+    st.write(f"學生總數：{len(student_df)}") # 測試行 2
+    # ... 原本的程式碼
     st.subheader("✉️ 寄送郵件（可多選）")
 
     if student_df.empty:
