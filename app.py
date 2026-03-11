@@ -775,20 +775,20 @@ with tab_preview:
                 display_pdf_as_images(pdf_bytes)
 
 # ============================================================
-# --- 標籤頁 3: 寄送郵件 ---
+# --- 標籤頁 3: 寄送郵件（可多選）---
+# 替換整個原本的 with tab_email 區塊為下面這段
 # ============================================================
 
 with tab_email:
-    st.subheader("✉️ 寄送郵件")
+    st.subheader("✉️ 寄送郵件（可多選）")
 
     if student_df.empty:
         st.error("❌ 學生資料表為空，無法寄送。")
         st.stop()
 
-    # --- 優化點 1：聯動篩選 ---
-    # 根據側邊欄選中的「學校」和「年級」精確過濾學生名單
+    # 根據側邊欄選中的「學校」和「年級」過濾學生名單
     df_filtered = student_df[
-        (student_df["學校"].astype(str) == selected_school) & 
+        (student_df["學校"].astype(str) == selected_school) &
         (student_df["年級"].astype(str) == selected_level)
     ]
 
@@ -798,110 +798,203 @@ with tab_email:
             st.info("請確認「學生資料」工作表中的學校名稱與年級是否完全匹配。")
         st.stop()
 
-    # --- 優化點 2：顯示過濾後的名單 ---
+    # 顯示過濾後的名單（多選）
     with st.container(border=True):
-        st.markdown(f"### 👤 選擇學生 ({selected_school} - {selected_level})")
-        
-        # 排序學生姓名，讓找人更直覺
+        st.markdown(f"### 👥 選擇學生（{selected_school} - {selected_level}）")
+
+        # 排序學生姓名
         student_names = sorted(df_filtered["學生姓名"].tolist())
-        
-        selected_student = st.selectbox(
-            "請輸入或選擇學生姓名",
-            [""] + student_names,
-            help="提示：點擊後直接輸入姓名可快速搜尋",
-            key="student_selector_main"
+
+        selected_students = st.multiselect(
+            "請選擇學生（可多選）",
+            student_names,
+            help="可一次選多位學生，按下「開始寄送」後系統會逐位產生 PDF 並寄出",
+            key="student_selector_multi"
         )
 
-    if not selected_student:
-        st.info("👆 請從上方選擇一位學生以開始寄送流程")
+    if not selected_students:
+        st.info("👆 請從上方勾選至少一位學生以開始寄送流程")
         st.stop()
 
-    # 獲取選中學生的詳細資料
-    row = df_filtered[df_filtered["學生姓名"] == selected_student].iloc[0]
-    # ... (後續的 PDF 生成與寄送邏輯保持不變)
-    school = row["學校"]
-    grade = row["年級"]
-    parent_email = row.get("家長 Email", "")
-    cc_email = row.get("老師 Email", "")
+    # 選擇是否要在寄送前預覽或直接寄送
+    st.markdown("### 寄送前選項")
+    preview_each = st.checkbox("寄送前為每位學生生成並顯示下載按鈕（會先產生 PDF）", value=False, key="preview_each_checkbox")
 
-    batch_key = f"{school}||{grade}"
+    # 快速顯示所選學生的摘要
+    with st.expander("📋 選取學生清單（摘要）", expanded=False):
+        for n in selected_students:
+            r = df_filtered[df_filtered["學生姓名"] == n].iloc[0]
+            pe = r.get("家長 Email", "")
+            te = r.get("老師 Email", "")
+            st.markdown(f"- **{n}**  · 家長: {pe if pe else '（未提供）'}  · 老師: {te if te else '（未提供）'}")
 
-    if batch_key not in st.session_state.final_pool:
-        with st.container(border=True):
-            st.error("⚠️ 此學生所屬批次尚未完成鎖定題庫。")
-            st.info("請先到「題庫鎖定」標籤頁完成鎖定。")
-        st.stop()
+    # 如果預覽選項啟用，先為每位生成 PDF 並顯示下載按鈕（但不寄送）
+    pregen_store = {}  # name -> bytes
+    if preview_each:
+        st.info("正在為選中學生生成預覽 PDF（此動作只會生成檔案，不會寄送）...")
+        preview_cols = st.columns(1)
+        for student_name in selected_students:
+            try:
+                row = df_filtered[df_filtered["學生姓名"] == student_name].iloc[0]
+            except Exception:
+                st.warning(f"找不到學生資料：{student_name}")
+                continue
 
-    questions = st.session_state.final_pool[batch_key]
+            school = row["學校"]
+            grade = row["年級"]
+            batch_key = f"{school}||{grade}"
 
-    with st.container(border=True):
-        st.markdown("### 📄 工作紙預覽")
+            if batch_key not in st.session_state.get("final_pool", {}):
+                st.warning(f"{student_name} 的批次尚未鎖定（跳過預覽）。")
+                continue
 
-        with st.spinner("正在生成 PDF..."):
-            # 這裡加上 .getvalue() 把文件對象轉成純數據
-            shuffled_email_qs = get_shuffled_questions(questions, f"email_{selected_student}")
-            pdf_obj = create_pdf(school, grade, shuffled_email_qs, student_name=selected_student, original_questions=questions)
-            pdf_bytes = pdf_obj.getvalue()
+            questions = st.session_state.final_pool[batch_key]
+            shuffled_qs = get_shuffled_questions(questions, f"email_preview_{student_name}")
 
-        st.download_button(
-            label="⬇️ 下載學生版 PDF",
-            data=pdf_bytes,
-            file_name=f"{selected_student}_worksheet.pdf",
-            mime="application/pdf",
-            use_container_width=True
-        )
+            try:
+                pdf_obj = create_pdf(school, grade, shuffled_qs, student_name=student_name, original_questions=questions)
+                pdf_bytes = pdf_obj.getvalue()
+                pregen_store[student_name] = pdf_bytes
+                st.download_button(
+                    label=f"⬇️ 下載 {student_name} 的預覽 PDF",
+                    data=pdf_bytes,
+                    file_name=f"{student_name}_worksheet_preview.pdf",
+                    mime="application/pdf",
+                    key=f"dl_preview_{student_name}"
+                )
+            except Exception as e:
+                st.error(f"{student_name} 預覽生成失敗: {e}")
 
     st.divider()
 
-    with st.container(border=True):
-        st.markdown("### ✉️ 寄送工作紙")
+    # 寄送按鈕（開始逐位寄送）
+    if st.button("📨 開始寄送（寄出所有已勾選學生）", type="primary", use_container_width=True, key="start_send_button"):
+        results = []            # 儲存每位學生的狀態（不含 PDF bytes）
+        pdf_store = {}          # 儲存每位生成的 PDF bytes (供下載或重寄)
+        total = len(selected_students)
+        progress = st.progress(0)
+        status_placeholder = st.empty()
 
-        with st.expander("📋 寄送資訊摘要", expanded=True):
-            st.markdown(f"""
-            - **學生姓名**：{selected_student}
-            - **學校**：{school}
-            - **年級**：{grade}
-            - **家長電郵**：{parent_email if parent_email else '（未提供）'}
-            - **老師電郵**：{cc_email if cc_email else '（未提供）'}
-            """)
+        for idx, student_name in enumerate(selected_students, start=1):
+            status_placeholder.info(f"處理中：{idx}/{total} — {student_name}")
+            # 預設為失敗，之後改寫
+            result = {
+                "student": student_name,
+                "email": None,
+                "status": "failed",
+                "message": ""
+            }
 
-        st.markdown("#### ⚠️ 確認寄送")
+            # 取得學生資料列
+            try:
+                row = df_filtered[df_filtered["學生姓名"] == student_name].iloc[0]
+            except Exception:
+                result["message"] = "學生資料找不到（檢查姓名欄位與資料）"
+                results.append(result)
+                progress.progress(int(idx / total * 100))
+                continue
 
-        if not parent_email or parent_email.lower() in ["n/a", "nan", "", "none"]:
-            st.error("❌ 該學生的家長電郵地址為空，無法寄送。")
-            st.stop()
+            school = row["學校"]
+            grade = row["年級"]
+            parent_email = row.get("家長 Email", "")
+            cc_email = row.get("老師 Email", "")
+            result["email"] = parent_email if parent_email else None
 
-        confirm_email = st.checkbox(
-            f"我確認要將工作紙寄送至以下電郵：{parent_email}",
-            key="email_confirm_checkbox"
-        )
+            batch_key = f"{school}||{grade}"
 
-        if not confirm_email:
-            st.caption("請勾選上方確認方塊以啟用寄送按鈕")
-            st.stop()
+            # 檢查是否已鎖定
+            if batch_key not in st.session_state.get("final_pool", {}):
+                result["status"] = "skipped"
+                result["message"] = "批次尚未鎖定"
+                results.append(result)
+                progress.progress(int(idx / total * 100))
+                continue
 
-        if st.button("📨 寄出工作紙", type="primary", use_container_width=True):
-            with st.spinner("正在發送郵件，請稍候..."):
+            questions = st.session_state.final_pool[batch_key]
+
+            # 檢查家長電郵
+            if not parent_email or str(parent_email).strip().lower() in ["", "n/a", "nan", "none"]:
+                result["status"] = "failed"
+                result["message"] = "找不到家長 Email"
+                results.append(result)
+                progress.progress(int(idx / total * 100))
+                continue
+
+            # 生成 PDF（若已在預生成 store 中，直接使用）
+            try:
+                if student_name in pregen_store:
+                    pdf_bytes = pregen_store[student_name]
+                else:
+                    shuffled_qs = get_shuffled_questions(questions, f"email_{student_name}")
+                    pdf_obj = create_pdf(school, grade, shuffled_qs, student_name=student_name, original_questions=questions)
+                    pdf_bytes = pdf_obj.getvalue()
+                pdf_store[student_name] = pdf_bytes
+            except Exception as e:
+                result["status"] = "failed"
+                result["message"] = f"生成 PDF 失敗: {e}"
+                results.append(result)
+                progress.progress(int(idx / total * 100))
+                continue
+
+            # 呼叫寄信函式（使用你現有的 send_email_with_pdf）
+            try:
                 ok, msg = send_email_with_pdf(
                     parent_email,
-                    selected_student,
+                    student_name,
                     school,
                     grade,
                     pdf_bytes,
                     cc_email=cc_email
                 )
+                if ok:
+                    result["status"] = "sent"
+                    result["message"] = msg or "發送成功"
+                else:
+                    result["status"] = "failed"
+                    result["message"] = f"寄信失敗: {msg}"
+            except Exception as e:
+                result["status"] = "failed"
+                result["message"] = f"寄信例外: {e}"
 
-            if ok:
-                st.success("🎉 已成功寄出工作紙！")
-                st.balloons()
-                st.toast(f"工作紙已成功寄送給 {selected_student} 的家長！", icon="✅")
-            else:
-                st.error(f"❌ 寄送失敗：{msg}")
-                st.info("請檢查網路連線或稍後再試。")
+            results.append(result)
+            progress.progress(int(idx / total * 100))
+
+        # 結束循環
+        status_placeholder.success("所有選中學生處理完畢。")
+        st.balloons()
+
+        # 顯示總表（簡潔摘要）
+        import pandas as pd
+        summary_df = pd.DataFrame([{
+            "學生": r["student"],
+            "家長 Email": r["email"] if r["email"] else "",
+            "狀態": r["status"],
+            "說明": r["message"]
+        } for r in results])
+        st.markdown("### 📊 寄送結果總表")
+        st.table(summary_df)
+
+        # 逐位提供下載按鈕（若已生成 PDF）
+        st.markdown("### 📎 已生成之 PDF（可下載或另行重寄）")
+        for r in results:
+            name = r["student"]
+            if name in pdf_store:
+                b = pdf_store[name]
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"{name}  —  狀態：{r['status']}  —  {r['message']}")
+                with col2:
+                    st.download_button(
+                        label="⬇️ 下載 PDF",
+                        data=b,
+                        file_name=f"{name}_worksheet.pdf",
+                        mime="application/pdf",
+                        key=f"dl_after_send_{name}"
+                    )
+
+        # 選擇性：將結果寫回 Google Sheet（如你想紀錄發送狀態可自行實作）
+        st.info("欲紀錄寄送狀態至 Google Sheet，可在此段加入寫回函式（視需求）")
 
 # ============================================================
-# --- End of App ---
+# --- End of 寄送郵件區塊 ---
 # ============================================================
-
-st.write("")
-st.write("© 2026 校本填充工作紙生成器 — 自動化教學工具")
